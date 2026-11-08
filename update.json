@@ -1,8 +1,0 @@
-{
-  "versionCode": 19,
-  "versionName": "2.9.0",
-  "apkUrl": "LIEN_DIRECT_DE_TON_APK",
-  "sha256": "",
-  "changelog": "- Résolution des reconnexions brutales\n- Amélioration de la fluidité VPN",
-  "force": false
-}
