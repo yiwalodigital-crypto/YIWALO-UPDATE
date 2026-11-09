@@ -1,8 +1,8 @@
 {
-  "versionCode": 21,
-  "versionName": "2.9.2",
-  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.2/YIWALO-Tunnel.apk",
+  "versionCode": 22,
+  "versionName": "2.9.3",
+  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.3/YIWALO-Tunnel.apk",
   "sha256": "",
-  "changelog": "- Connexion validée seulement si le tunnel répond\n- Vibration plus forte à la connexion",
+  "changelog": "- Téléchargement reprenable en cas de coupure\n- Connexion validée seulement si le tunnel répond\n- Vibration plus forte",
   "force": false
 }
