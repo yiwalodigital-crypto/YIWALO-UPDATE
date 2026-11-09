@@ -1,8 +1,8 @@
 {
-  "versionCode": 19,
-  "versionName": "2.9.0",
-  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.0/YIWALO-Tunnel.apk",
+  "versionCode": 20,
+  "versionName": "2.9.1",
+  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.1/YIWALO-Tunnel.apk",
   "sha256": "",
-  "changelog": "- Amélioration de la vitesse\n- Résolution des reconnexions brutales",
+  "changelog": "- Journal réseau corrigé\n- Mise à jour automatique améliorée",
   "force": false
 }
