@@ -1,8 +1,8 @@
 {
-  "versionCode": 26,
-  "versionName": "2.9.7",
-  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.7/YIWALO-Tunnel.apk",
+  "versionCode": 27,
+  "versionName": "2.9.8",
+  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.8/YIWALO-Tunnel.apk",
   "sha256": "",
-  "changelog": "Journal lisible en thème clair",
+  "changelog": "Outil renommé Recherche d'IP",
   "force": false
 }
