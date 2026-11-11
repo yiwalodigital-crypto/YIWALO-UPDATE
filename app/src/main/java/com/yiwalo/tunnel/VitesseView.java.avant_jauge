@@ -1,0 +1,329 @@
+package com.yiwalo.tunnel;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicLong;
+
+final class VitesseView extends LinearLayout {
+    private static final String BASE = "https://speed.cloudflare.com";
+    private static final int N = 50;
+    private final Context ctx;
+    private final Handler h = new Handler(Looper.getMainLooper());
+    private volatile int gen;
+    private boolean enCours;
+    private final double[] pts = new double[N];
+    private final TextView phase, valeur, bouton, vLat, vJit, vDown, vUp;
+    private final Courbe courbe;
+    private int couleur = Ui.VERT;
+
+    VitesseView(Context ctx, Runnable retour) {
+        super(ctx);
+        this.ctx = ctx;
+        setOrientation(VERTICAL);
+        setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 24));
+        addView(Ui.entete(ctx, "Test de vitesse", retour));
+
+        LinearLayout hero = Ui.carte(ctx);
+        int p = Ui.dp(ctx, 16);
+        hero.setPadding(p, p, p, p);
+        hero.setGravity(Gravity.CENTER_HORIZONTAL);
+        phase = Ui.texte(ctx, "PRÊT", 11f, Ui.DISCRET, true);
+        phase.setLetterSpacing(0.1f);
+        hero.addView(phase);
+        valeur = Ui.texte(ctx, "—", 46f, Ui.TEXTE, true);
+        valeur.setGravity(Gravity.CENTER);
+        valeur.setPadding(0, Ui.dp(ctx, 4), 0, 0);
+        hero.addView(valeur);
+        TextView unite = Ui.texte(ctx, "Mb/s", 13f, Ui.DISCRET, false);
+        unite.setGravity(Gravity.CENTER);
+        hero.addView(unite);
+        courbe = new Courbe(ctx);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(ctx, 90));
+        cp.topMargin = Ui.dp(ctx, 10);
+        hero.addView(courbe, cp);
+        addView(hero);
+
+        LinearLayout res = Ui.carte(ctx);
+        vLat = ligne(ctx, res, "Latence");
+        res.addView(Ui.separateur(ctx));
+        vJit = ligne(ctx, res, "Gigue");
+        res.addView(Ui.separateur(ctx));
+        vDown = ligne(ctx, res, "Téléchargement");
+        res.addView(Ui.separateur(ctx));
+        vUp = ligne(ctx, res, "Envoi");
+        addView(res);
+
+        bouton = Ui.bouton(ctx, "Démarrer le test", Ui.VERT, this::basculer);
+        addView(bouton);
+        TextView note = Ui.texte(ctx, "Utilise jusqu’à 80 Mo de données.", 12f, Ui.DISCRET, false);
+        note.setGravity(Gravity.CENTER);
+        note.setPadding(0, Ui.dp(ctx, 10), 0, 0);
+        addView(note);
+    }
+
+    private TextView ligne(Context c, LinearLayout parent, String label) {
+        LinearLayout r = Ui.info(c, label, "—");
+        parent.addView(r);
+        return (TextView) r.getChildAt(1);
+    }
+
+    private static String fmt(double v) {
+        return v >= 100 ? String.format(Locale.getDefault(), "%.0f", v)
+                : String.format(Locale.getDefault(), "%.1f", v);
+    }
+
+    private void basculer() {
+        if (enCours) arreter(); else demarrer();
+    }
+
+    private void arreter() {
+        gen++;
+        enCours = false;
+        phase.setText("ARRÊTÉ");
+        bouton.setText("Redémarrer le test");
+        bouton.setBackground(Ui.fond(ctx, Ui.VERT, 12, 0));
+    }
+
+    private void demarrer() {
+        final int g = ++gen;
+        enCours = true;
+        for (int i = 0; i < N; i++) pts[i] = 0;
+        couleur = Ui.VERT;
+        courbe.invalidate();
+        valeur.setText("—");
+        vLat.setText("—");
+        vJit.setText("—");
+        vDown.setText("—");
+        vUp.setText("—");
+        phase.setText("LATENCE");
+        bouton.setText("Arrêter");
+        bouton.setBackground(Ui.fond(ctx, Ui.ROUGE, 12, 0));
+        new Thread(() -> {
+            try {
+                final double[] lat = latence(g);
+                if (g != gen) return;
+                h.post(() -> {
+                    if (g != gen) return;
+                    vLat.setText(String.format(Locale.getDefault(), "%.0f ms", lat[0]));
+                    vJit.setText(String.format(Locale.getDefault(), "%.0f ms", lat[1]));
+                    phase.setText("TÉLÉCHARGEMENT");
+                    couleur = Ui.VERT;
+                    valeur.setText("0.0");
+                });
+                final double d = debit(g, true);
+                if (g != gen) return;
+                h.post(() -> {
+                    if (g != gen) return;
+                    vDown.setText(fmt(d) + " Mb/s");
+                    phase.setText("ENVOI");
+                    couleur = Ui.ORANGE;
+                    for (int i = 0; i < N; i++) pts[i] = 0;
+                    valeur.setText("0.0");
+                    courbe.invalidate();
+                });
+                final double u = debit(g, false);
+                if (g != gen) return;
+                h.post(() -> {
+                    if (g != gen) return;
+                    vUp.setText(fmt(u) + " Mb/s");
+                    phase.setText("TERMINÉ");
+                    valeur.setText(fmt(d));
+                    enCours = false;
+                    bouton.setText("Refaire le test");
+                    bouton.setBackground(Ui.fond(ctx, Ui.VERT, 12, 0));
+                });
+            } catch (Exception e) {
+                h.post(() -> {
+                    if (g != gen) return;
+                    enCours = false;
+                    phase.setText("ÉCHEC : RÉSEAU INDISPONIBLE");
+                    valeur.setText("—");
+                    bouton.setText("Réessayer");
+                    bouton.setBackground(Ui.fond(ctx, Ui.VERT, 12, 0));
+                });
+            }
+        }, "yiwalo-vitesse").start();
+    }
+
+    private HttpURLConnection ouvrir(String u) throws IOException {
+        HttpURLConnection c = (HttpURLConnection) new URL(u).openConnection();
+        c.setConnectTimeout(6000);
+        c.setReadTimeout(8000);
+        c.setUseCaches(false);
+        c.setRequestProperty("Accept-Encoding", "identity");
+        c.setRequestProperty("User-Agent", "Mozilla/5.0");
+        return c;
+    }
+
+    private double[] latence(int g) throws IOException {
+        List<Double> l = new ArrayList<>();
+        for (int i = 0; i < 7 && g == gen; i++) {
+            long t0 = System.nanoTime();
+            HttpURLConnection c = ouvrir(BASE + "/__down?bytes=0");
+            if (c.getResponseCode() != 200) throw new IOException("http");
+            InputStream in = c.getInputStream();
+            byte[] b = new byte[512];
+            while (in.read(b) > 0) { }
+            in.close();
+            double ms = (System.nanoTime() - t0) / 1e6;
+            if (i > 0) l.add(ms);
+        }
+        if (l.isEmpty()) throw new IOException("aucune mesure");
+        double somme = 0, jit = 0;
+        for (int i = 0; i < l.size(); i++) {
+            somme += l.get(i);
+            if (i > 0) jit += Math.abs(l.get(i) - l.get(i - 1));
+        }
+        return new double[]{somme / l.size(), l.size() > 1 ? jit / (l.size() - 1) : 0};
+    }
+
+    private void telecharger(int g, AtomicLong total, long fin, long plafond) {
+        byte[] b = new byte[65536];
+        try {
+            while (g == gen && System.nanoTime() < fin && total.get() < plafond) {
+                HttpURLConnection c = ouvrir(BASE + "/__down?bytes=15000000");
+                try {
+                    InputStream in = c.getInputStream();
+                    int n;
+                    while (g == gen && System.nanoTime() < fin && total.get() < plafond
+                            && (n = in.read(b)) > 0) {
+                        total.addAndGet(n);
+                    }
+                } finally {
+                    c.disconnect();
+                }
+            }
+        } catch (Exception ignore) {
+            // connexion interrompue
+        }
+    }
+
+    private void envoyer(int g, AtomicLong total, long fin, long plafond) {
+        byte[] b = new byte[32768];
+        java.util.Arrays.fill(b, (byte) 0x5A);
+        HttpURLConnection c = null;
+        try {
+            c = ouvrir(BASE + "/__up");
+            c.setRequestMethod("POST");
+            c.setDoOutput(true);
+            c.setChunkedStreamingMode(32768);
+            c.setRequestProperty("Content-Type", "application/octet-stream");
+            OutputStream os = c.getOutputStream();
+            while (g == gen && System.nanoTime() < fin && total.get() < plafond) {
+                os.write(b);
+                total.addAndGet(b.length);
+            }
+            try {
+                os.close();
+                c.getResponseCode();
+            } catch (Exception ignore) {
+                // fin de l'envoi
+            }
+        } catch (Exception ignore) {
+            // connexion interrompue
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private double debit(final int g, final boolean down) throws InterruptedException {
+        final int nb = down ? 4 : 3;
+        final long fin0 = System.nanoTime() + (down ? 8L : 6L) * 1000000000L;
+        final long plafond = down ? 60000000L : 20000000L;
+        final AtomicLong total = new AtomicLong();
+        final long t0 = System.nanoTime();
+        Thread[] ts = new Thread[nb];
+        for (int i = 0; i < nb; i++) {
+            ts[i] = new Thread(() -> {
+                if (down) telecharger(g, total, fin0, plafond);
+                else envoyer(g, total, fin0, plafond);
+            }, "yiwalo-vitesse-" + i);
+            ts[i].start();
+        }
+        long prev = 0, tPrev = t0, base = -1, tBase = t0;
+        while (g == gen) {
+            Thread.sleep(250);
+            long now = System.nanoTime();
+            long cur = total.get();
+            double inst = (cur - prev) * 8.0 / 1e6 / Math.max(0.05, (now - tPrev) / 1e9);
+            prev = cur;
+            tPrev = now;
+            if (base < 0 && now - t0 >= 1000000000L) {
+                base = cur;
+                tBase = now;
+            }
+            echantillon(g, inst);
+            boolean vivant = false;
+            for (Thread t : ts) if (t.isAlive()) vivant = true;
+            if (!vivant || now >= fin0) break;
+        }
+        long cur = total.get();
+        long now = System.nanoTime();
+        if (base >= 0 && now - tBase > 1000000000L) {
+            return (cur - base) * 8.0 / 1e6 / ((now - tBase) / 1e9);
+        }
+        return cur * 8.0 / 1e6 / Math.max(0.2, (now - t0) / 1e9);
+    }
+
+    private void echantillon(final int g, final double v) {
+        h.post(() -> {
+            if (g != gen) return;
+            System.arraycopy(pts, 1, pts, 0, N - 1);
+            pts[N - 1] = v;
+            valeur.setText(fmt(v));
+            courbe.invalidate();
+        });
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        gen++;
+        super.onDetachedFromWindow();
+    }
+
+    private final class Courbe extends View {
+        private final Paint trait = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint grille = new Paint();
+
+        Courbe(Context c) {
+            super(c);
+            trait.setStyle(Paint.Style.STROKE);
+            trait.setStrokeWidth(Ui.dp(c, 2));
+            grille.setColor(Ui.BORD);
+            grille.setStrokeWidth(1f);
+        }
+
+        @Override protected void onDraw(Canvas cv) {
+            int w = getWidth();
+            int hh = getHeight();
+            double max = 5;
+            for (int i = 0; i < N; i++) max = Math.max(max, pts[i]);
+            for (int k = 1; k < 4; k++) cv.drawLine(0, hh * k / 4f, w, hh * k / 4f, grille);
+            trait.setColor(couleur);
+            Path path = new Path();
+            for (int i = 0; i < N; i++) {
+                float x = w * i / (float) (N - 1);
+                float y = (float) (hh - 4 - (hh - 8) * pts[i] / max);
+                if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+            }
+            cv.drawPath(path, trait);
+        }
+    }
+}

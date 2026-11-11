@@ -1,0 +1,728 @@
+package com.yiwalo.tunnel.vpn;
+
+import com.yiwalo.tunnel.config.TypeConnexion;
+import com.yiwalo.tunnel.PartageConfig;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.net.LocalServerSocket;
+import android.net.LocalSocket;
+import android.net.LocalSocketAddress;
+import android.net.TrafficStats;
+import android.net.VpnService;
+import android.os.ParcelFileDescriptor;
+import android.os.SystemClock;
+
+import com.yiwalo.tunnel.EtatVpn;
+import com.yiwalo.tunnel.Journal;
+import com.yiwalo.tunnel.MainActivity;
+import com.yiwalo.tunnel.R;
+import com.yiwalo.tunnel.SuiviVpn;
+import com.yiwalo.tunnel.config.ConfigStore;
+import com.yiwalo.tunnel.config.Configuration;
+import com.yiwalo.tunnel.config.EditeurLien;
+import com.yiwalo.tunnel.config.ErreurImport;
+
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
+
+public class YiwaloVpnService extends VpnService {
+
+    public static final String ACTION_CONNECTER = "com.yiwalo.tunnel.action.CONNECTER";
+    public static final String ACTION_DECONNECTER = "com.yiwalo.tunnel.action.DECONNECTER";
+
+    private static final String CANAL = "yiwalo_vpn";
+    private static final int ID_PRINCIPALE = 1;
+    private static final int ID_INFO = 2;
+    private static final Pattern IPV4 = Pattern.compile("^\\d{1,3}(\\.\\d{1,3}){3}$");
+
+    private static final class ErreurVpn extends Exception {
+        ErreurVpn(String message) {
+            super(message);
+        }
+    }
+
+    private final Object verrou = new Object();
+    private Thread fil;
+    private volatile boolean arret;
+    private ParcelFileDescriptor tun;
+    private Process processus;
+    private LocalSocket ecoute;
+    private LocalServerSocket serveur;
+    private File fichierConfig;
+    private File fichierSocket;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        NotificationChannel canal = new NotificationChannel(
+                CANAL, getString(R.string.canal_nom), NotificationManager.IMPORTANCE_LOW);
+        getSystemService(NotificationManager.class).createNotificationChannel(canal);
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent == null ? null : intent.getAction();
+        if (ACTION_DECONNECTER.equals(action)) {
+            Journal.info("Déconnexion demandée.");
+            deconnecter();
+        } else if (ACTION_CONNECTER.equals(action)) {
+            demarrer();
+        }
+        return START_NOT_STICKY;
+    }
+
+    @Override
+    public void onRevoke() {
+        Journal.avertissement("Android a révoqué l'autorisation VPN.");
+        deconnecter();
+        super.onRevoke();
+    }
+
+    @Override
+    public void onDestroy() {
+        arret = true;
+        nettoyer();
+        super.onDestroy();
+    }
+
+    // ------------------------------------------------------------------
+    // Démarrage et arrêt
+    // ------------------------------------------------------------------
+
+    private void demarrer() {
+        try {
+            startForeground(ID_PRINCIPALE, notification(R.string.notif_connexion, true));
+        } catch (RuntimeException e) {
+            String raison = "Impossible de démarrer le service de premier plan : " + e;
+            Journal.erreur(raison);
+            SuiviVpn.changer(EtatVpn.ERREUR, raison);
+            stopSelf();
+            return;
+        }
+        synchronized (verrou) {
+            if (fil != null) {
+                Journal.avertissement("Une connexion est déjà en cours : demande ignorée.");
+                return;
+            }
+            arret = false;
+            fil = new Thread(this::connexion, "yiwalo-connexion");
+            fil.start();
+        }
+    }
+
+    private void deconnecter() {
+        arret = true;
+        new Thread(() -> {
+            Thread t;
+            synchronized (verrou) {
+                t = fil;
+            }
+            if (t != null) {
+                t.interrupt();
+            }
+            nettoyer();
+            etat(EtatVpn.DECONNECTE, "");
+            notifierInfo(R.string.notif_deconnecte, "");
+            arretService();
+        }, "yiwalo-arret").start();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void arretService() {
+        stopForeground(true);
+        stopSelf();
+    }
+
+    private volatile String indice = "";
+
+    private static String conseilPour(String ligne) {
+        if (ligne.contains("REALITY: received real certificate")
+                || ligne.contains("REALITY: processed invalid connection")) {
+            return "Le serveur ne semble pas reconnaître cette configuration Reality. "
+                    + "Vérifiez la clé publique, le Short ID et le SNI, "
+                    + "ou demandez un nouveau lien (il est peut-être expiré).";
+        }
+        if (ligne.contains("x509: certificate is valid for")) {
+            return "Le certificat du serveur ne correspond pas au nom TLS. "
+                    + "Corrigez le champ SNI avec le nom valide indiqué par votre fournisseur.";
+        }
+        if (ligne.contains("handshake failure")) {
+            return "Le serveur a refusé la connexion sécurisée. "
+                    + "Vérifiez le SNI et le type de sécurité, ou demandez un nouveau lien.";
+        }
+        if (ligne.contains("vless without TLS")) {
+            return "Cette configuration n'est pas chiffrée et utilise une adresse IP : "
+                    + "le moteur la refuse. Demandez à votre fournisseur un lien avec "
+                    + "un nom de domaine ou avec TLS / Reality.";
+        }
+        if (ligne.contains("i/o timeout")) {
+            return "Le serveur ne répond pas dans le délai prévu. "
+                    + "Vérifiez le port et votre connexion internet.";
+        }
+        if (ligne.contains("connection refused")) {
+            return "Le serveur refuse la connexion. Vérifiez l'adresse et le port.";
+        }
+        return null;
+    }
+
+    private final java.util.LinkedList<String> diagnostic = new java.util.LinkedList<>();
+
+    private void garderDiagnostic(String corps) {
+        synchronized (diagnostic) {
+            diagnostic.remove(corps);
+            diagnostic.addLast(corps);
+            while (diagnostic.size() > 4) {
+                diagnostic.removeFirst();
+            }
+        }
+    }
+
+    private void echec(String raisonBrute) {
+        String raison = indice.isEmpty()
+                ? raisonBrute : raisonBrute + " Conseil : " + indice;
+        synchronized (diagnostic) {
+            for (String l : diagnostic) {
+                Journal.avertissement("[moteur] " + l);
+            }
+            diagnostic.clear();
+        }
+        Journal.erreur(raison);
+        nettoyer();
+        etat(EtatVpn.ERREUR, raison);
+        notifierInfo(R.string.notif_erreur, raison);
+        arretService();
+    }
+
+    // ------------------------------------------------------------------
+    // Séquence de connexion
+    // ------------------------------------------------------------------
+
+    private void connexion() {
+        try {
+            synchronized (diagnostic) {
+                diagnostic.clear();
+            }
+            indice = "";
+            etat(EtatVpn.PREPARATION, "Vérification de la configuration");
+            Configuration c = new ConfigStore(this).active();
+            if (c == null) {
+                throw new ErreurVpn("Aucune configuration sélectionnée.");
+            }
+        String refusAcces = PartageConfig.verifierAcces(this, c);
+        if (refusAcces != null) {
+            throw new ErreurVpn(refusAcces);
+        }
+        if (c.type == TypeConnexion.SLOWDNS) {
+            throw new ErreurVpn("Moteur SlowDNS non intégré : la configuration est enregistrée, mais la connexion n'est pas encore disponible.");
+        }
+            String sniLien = "";
+            String hoteLien = "";
+            try {
+                EditeurLien.Champs champs = EditeurLien.lire(c);
+                sniLien = champs.sni;
+                hoteLien = champs.hostEntete;
+            } catch (ErreurImport ignore) {
+                // type non modifiable : pas de terme supplémentaire à masquer
+            }
+            Journal.definirTermes(c.serveur, c.sniManuel, sniLien, hoteLien);
+            Journal.info("Configuration : " + c.nom + " (" + c.type.libelle + ")");
+
+            String adresse = resoudre(c.serveur);
+            long disponibilite = joindre(adresse, c.port);
+            if (disponibilite < 0) {
+                Journal.avertissement("Test préliminaire du port sans réponse : "
+                        + "la connexion continue, le moteur donnera le résultat réel.");
+            } else {
+                Journal.info("Port du serveur joignable (" + disponibilite + " ms).");
+            }
+            GenerateurXray.Resultat r;
+            try {
+                r = GenerateurXray.generer(c, adresse);
+            } catch (ErreurImport e) {
+                throw new ErreurVpn(e.getMessage());
+            }
+
+            String dossier = getApplicationInfo().nativeLibraryDir;
+            File xray = new File(dossier, "libxray.so");
+            File lanceur = new File(dossier, "libfdexec.so");
+            if (!xray.exists() || !lanceur.exists()) {
+                throw new ErreurVpn("Les moteurs sont absents de l'application.");
+            }
+
+            try {
+                org.json.JSONObject ss = new org.json.JSONObject(r.json)
+                        .getJSONArray("outbounds").getJSONObject(0)
+                        .getJSONObject("streamSettings");
+                Journal.info("Transport : " + ss.optString("network")
+                        + ", sécurité : " + ss.optString("security")
+                        + ", nom TLS : " + (ss.optJSONObject("tlsSettings") == null
+                        ? "—" : ss.optJSONObject("tlsSettings").optString("serverName", "—")));
+            } catch (org.json.JSONException ignore) {
+                // résumé facultatif
+            }
+            fichierConfig = new File(getFilesDir(), "xray-config.json");
+            ecrire(fichierConfig, r.json);
+
+            Journal.info("Contrôle de la configuration par le moteur.");
+            int code = executer(Arrays.asList(
+                    xray.getPath(), "run", "-test", "-c", fichierConfig.getPath()), 20);
+            if (code != 0) {
+                throw new ErreurVpn("Le moteur refuse la configuration (code " + code
+                        + "). Consultez les journaux.");
+            }
+            verifierArret();
+
+            etat(EtatVpn.CONNEXION, "Création de l'interface VPN");
+            Builder b = new Builder();
+            b.setSession(getString(R.string.app_name));
+            b.setMtu(1500);
+            b.addAddress("172.19.0.1", 30);
+            b.addRoute("0.0.0.0", 0);
+            b.addDnsServer("1.1.1.1");
+            b.addDnsServer("8.8.8.8");
+            try {
+                b.addDisallowedApplication(getPackageName());
+            } catch (PackageManager.NameNotFoundException e) {
+                throw new ErreurVpn("Exclusion de l'application impossible.");
+            }
+            synchronized (verrou) {
+                verifierArret();
+                tun = b.establish();
+            }
+            if (tun == null) {
+                throw new ErreurVpn("Android a refusé de créer l'interface VPN "
+                        + "(autorisation absente ou révoquée).");
+            }
+            Journal.info("Interface VPN créée.");
+
+            fichierSocket = new File(getCacheDir(), "fd.sock");
+            fichierSocket.delete();
+            ecoute = new LocalSocket(LocalSocket.SOCKET_STREAM);
+            ecoute.bind(new LocalSocketAddress(
+                    fichierSocket.getPath(), LocalSocketAddress.Namespace.FILESYSTEM));
+            serveur = new LocalServerSocket(ecoute.getFileDescriptor());
+
+            etat(EtatVpn.CONNEXION, "Démarrage du moteur");
+            ProcessBuilder pb = new ProcessBuilder(Arrays.asList(
+                    lanceur.getPath(), fichierSocket.getPath(), "XRAY_TUN_FD",
+                    xray.getPath(), "run", "-c", fichierConfig.getPath()));
+            pb.environment().put("XRAY_LOCATION_ASSET", getFilesDir().getPath());
+            pb.redirectErrorStream(true);
+            final Process p = pb.start();
+            processus = p;
+            lireSortie(p);
+            Journal.info("Moteur lancé, transmission de l'interface VPN.");
+            envoyerTun();
+
+            etat(EtatVpn.CONNEXION, "Vérification du tunnel");
+            long latence = -1;
+            for (int i = 0; i < 6 && latence < 0; i++) {
+                verifierArret();
+                if (!p.isAlive()) {
+                    throw new ErreurVpn("Le moteur s'est arrêté pendant le démarrage (code "
+                            + p.exitValue() + "). Consultez les journaux.");
+                }
+                Thread.sleep(1500);
+                latence = tester(r);
+            }
+            if (latence < 0) {
+                throw new ErreurVpn("Le serveur ne répond pas à travers le tunnel. "
+                        + "Vérifiez votre connexion internet, puis demandez un nouveau lien : "
+                        + "cette configuration est peut-être expirée ou bloquée sur votre réseau.");
+            }
+
+            int uid = android.os.Process.myUid();
+            SuiviVpn.definirBase(TrafficStats.getUidRxBytes(uid), TrafficStats.getUidTxBytes(uid));
+            SuiviVpn.definirLatence(latence);
+            indice = "";
+            etat(EtatVpn.CONNECTE, "");
+            getSystemService(NotificationManager.class)
+                    .notify(ID_PRINCIPALE, notification(R.string.notif_connecte, true));
+            Journal.info("Tunnel établi : le serveur a répondu en " + latence + " ms.");
+
+            surveiller(p, r);
+        } catch (InterruptedException e) {
+            // Arrêt demandé par l'utilisateur : le nettoyage est fait par deconnecter().
+        } catch (ErreurVpn | IOException | RuntimeException e) {
+            if (!arret) {
+                echec(e.getMessage() == null ? e.toString() : e.getMessage());
+            }
+        } finally {
+            synchronized (verrou) {
+                if (fil == Thread.currentThread()) {
+                    fil = null;
+                }
+            }
+        }
+    }
+
+    private void surveiller(Process p, GenerateurXray.Resultat r)
+            throws InterruptedException, ErreurVpn {
+        long prochain = SystemClock.elapsedRealtime() + 30000;
+        while (!arret) {
+            if (p.waitFor(1, TimeUnit.SECONDS)) {
+                if (arret) {
+                    return;
+                }
+                throw new ErreurVpn("Le moteur s'est arrêté de façon inattendue (code "
+                        + p.exitValue() + ").");
+            }
+            if (SystemClock.elapsedRealtime() >= prochain) {
+                prochain += 30000;
+                long l = tester(r);
+                SuiviVpn.definirLatence(l);
+                if (l < 0) {
+                    Journal.avertissement("La mesure de latence a échoué.");
+                }
+            }
+        }
+    }
+
+    private long joindre(String adresse, int port) {
+        long debut = SystemClock.elapsedRealtime();
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress(adresse, port), 3000);
+            return SystemClock.elapsedRealtime() - debut;
+        } catch (IOException e) {
+            return -1;
+        }
+    }
+
+    private void verifierArret() throws InterruptedException {
+        if (arret) {
+            throw new InterruptedException("arrêt demandé");
+        }
+    }
+
+    private void envoyerTun() throws ErreurVpn, IOException {
+        final LocalServerSocket s = serveur;
+        final ParcelFileDescriptor t = tun;
+        if (s == null || t == null) {
+            throw new ErreurVpn("Connexion annulée.");
+        }
+        Thread garde = new Thread(() -> {
+            try {
+                Thread.sleep(10000);
+            } catch (InterruptedException e) {
+                return;
+            }
+            try {
+                s.close();
+            } catch (IOException ignore) {
+                // fermeture de la socket : rien à faire
+            }
+        }, "yiwalo-garde");
+        garde.setDaemon(true);
+        garde.start();
+
+        LocalSocket client;
+        try {
+            client = s.accept();
+        } catch (IOException e) {
+            if (arret) {
+                throw new ErreurVpn("Connexion annulée.");
+            }
+            throw new ErreurVpn("Le moteur n'a pas reçu l'interface VPN dans le délai prévu. "
+                    + "Consultez les journaux.");
+        } finally {
+            garde.interrupt();
+        }
+        try {
+            client.setFileDescriptorsForSend(new FileDescriptor[]{t.getFileDescriptor()});
+            OutputStream sortie = client.getOutputStream();
+            sortie.write(0);
+            sortie.flush();
+        } finally {
+            client.close();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Test réel du tunnel (SOCKS5 local authentifié -> serveur -> internet)
+    // ------------------------------------------------------------------
+
+    private long tester(GenerateurXray.Resultat r) {
+        long debut = SystemClock.elapsedRealtime();
+        final String[] etape = {"connexion locale au moteur"};
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress("127.0.0.1", r.portTest), 3000);
+            s.setSoTimeout(7000);
+            OutputStream out = s.getOutputStream();
+            InputStream in = s.getInputStream();
+
+            etape[0] = "échange avec le moteur";
+            out.write(new byte[]{5, 1, 2});
+            out.flush();
+            byte[] rep = lire(in, 2);
+            if (rep[0] != 5 || rep[1] != 2) {
+                Journal.avertissement("Test du tunnel : négociation SOCKS refusée.");
+                return -1;
+            }
+
+            byte[] u = r.utilisateurTest.getBytes(StandardCharsets.UTF_8);
+            byte[] mdp = r.motDePasseTest.getBytes(StandardCharsets.UTF_8);
+            ByteArrayOutputStream auth = new ByteArrayOutputStream();
+            auth.write(1);
+            auth.write(u.length);
+            auth.write(u);
+            auth.write(mdp.length);
+            auth.write(mdp);
+            out.write(auth.toByteArray());
+            out.flush();
+            rep = lire(in, 2);
+            if (rep[1] != 0) {
+                Journal.avertissement("Test du tunnel : authentification SOCKS refusée.");
+                return -1;
+            }
+
+            etape[0] = "connexion au serveur distant";
+            String hote = "connectivitycheck.gstatic.com";
+            byte[] h = hote.getBytes(StandardCharsets.US_ASCII);
+            ByteArrayOutputStream conn = new ByteArrayOutputStream();
+            conn.write(new byte[]{5, 1, 0, 3});
+            conn.write(h.length);
+            conn.write(h);
+            conn.write(0);
+            conn.write(80);
+            out.write(conn.toByteArray());
+            out.flush();
+            rep = lire(in, 4);
+            if (rep[1] != 0) {
+                Journal.avertissement("Test du tunnel : connexion au serveur refusée (code SOCKS "
+                        + rep[1] + ").");
+                return -1;
+            }
+            int type = rep[3];
+            int reste = type == 1 ? 4 : type == 4 ? 16 : in.read();
+            lire(in, reste + 2);
+
+            out.write(("GET /generate_204 HTTP/1.1\r\nHost: " + hote
+                    + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+
+            etape[0] = "attente de la réponse du serveur";
+            StringBuilder ligne = new StringBuilder();
+            int octet;
+            while (ligne.length() < 100 && (octet = in.read()) >= 0 && octet != '\n') {
+                ligne.append((char) octet);
+            }
+            String reponse = ligne.toString().trim();
+            if (reponse.startsWith("HTTP/") && reponse.contains(" 204")) {
+                return SystemClock.elapsedRealtime() - debut;
+            }
+            Journal.avertissement("Test du tunnel : réponse inattendue « " + reponse + " ».");
+            return -1;
+        } catch (IOException e) {
+            Journal.avertissement("Test du tunnel : " + e.getMessage()
+                    + " (étape : " + etape[0] + ")");
+            return -1;
+        }
+    }
+
+    private static byte[] lire(InputStream in, int n) throws IOException {
+        byte[] b = new byte[n];
+        int lu = 0;
+        while (lu < n) {
+            int k = in.read(b, lu, n - lu);
+            if (k < 0) {
+                throw new IOException("Connexion fermée par le moteur");
+            }
+            lu += k;
+        }
+        return b;
+    }
+
+    // ------------------------------------------------------------------
+    // Outils
+    // ------------------------------------------------------------------
+
+    private String resoudre(String hote) throws ErreurVpn {
+        if (IPV4.matcher(hote).matches() || hote.contains(":")) {
+            return hote;
+        }
+        try {
+            InetAddress[] toutes = InetAddress.getAllByName(hote);
+            InetAddress choix = toutes[0];
+            for (InetAddress a : toutes) {
+                if (a instanceof Inet4Address) {
+                    choix = a;
+                    break;
+                }
+            }
+            Journal.info("Adresse du serveur résolue : " + choix.getHostAddress());
+            return choix.getHostAddress();
+        } catch (UnknownHostException e) {
+            throw new ErreurVpn("Impossible de résoudre le nom du serveur « " + hote
+                    + " ». Vérifiez votre connexion internet.");
+        }
+    }
+
+    private int executer(List<String> commande, int secondes)
+            throws IOException, InterruptedException, ErreurVpn {
+        ProcessBuilder pb = new ProcessBuilder(commande);
+        pb.environment().put("XRAY_LOCATION_ASSET", getFilesDir().getPath());
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+        lireSortie(p);
+        if (!p.waitFor(secondes, TimeUnit.SECONDS)) {
+            p.destroyForcibly();
+            throw new ErreurVpn("Le contrôle de la configuration a dépassé le délai.");
+        }
+        Thread.sleep(300);
+        return p.exitValue();
+    }
+
+    private void lireSortie(Process p) {
+        Thread t = new Thread(() -> {
+            try (BufferedReader lecteur = new BufferedReader(
+                    new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                String ligne;
+                String dernier = "";
+                while ((ligne = lecteur.readLine()) != null) {
+                    String conseil = conseilPour(ligne);
+                    if (conseil != null && indice.isEmpty()) {
+                        indice = conseil;
+                    }
+                    boolean connecte = SuiviVpn.etat() == EtatVpn.CONNECTE;
+                    boolean erreurMoteur = ligne.contains("[Error]");
+                    boolean avertissement = ligne.contains("[Warning]")
+                            && !ligne.contains("deprecated") && !ligne.contains("started");
+                    boolean echec = ligne.contains("failed to");
+                    if (!(erreurMoteur || avertissement || echec)) {
+                        continue;
+                    }
+                    String corps = ligne.replaceFirst("^\\S+ \\S+ ", "")
+                            .replaceFirst("\\[\\d+\\] ", "");
+                    if (corps.equals(dernier)) {
+                        continue;
+                    }
+                    dernier = corps;
+                    if (erreurMoteur) {
+                        Journal.erreur("[moteur] " + ligne);
+                    } else {
+                        garderDiagnostic(corps);
+                    }
+                }
+            } catch (IOException ignore) {
+                // flux fermé à l'arrêt du moteur
+            }
+        }, "yiwalo-sortie");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void ecrire(File fichier, String contenu) throws IOException {
+        try (FileOutputStream sortie = new FileOutputStream(fichier)) {
+            sortie.write(contenu.getBytes(StandardCharsets.UTF_8));
+        }
+        fichier.setReadable(false, false);
+        fichier.setReadable(true, true);
+        fichier.setWritable(false, false);
+        fichier.setWritable(true, true);
+    }
+
+    private void nettoyer() {
+        synchronized (verrou) {
+            try {
+                if (serveur != null) {
+                    serveur.close();
+                }
+            } catch (IOException ignore) {
+                // déjà fermée
+            }
+            try {
+                if (ecoute != null) {
+                    ecoute.close();
+                }
+            } catch (IOException ignore) {
+                // déjà fermée
+            }
+            serveur = null;
+            ecoute = null;
+            if (fichierSocket != null) {
+                fichierSocket.delete();
+            }
+            Process p = processus;
+            processus = null;
+            if (p != null) {
+                p.destroy();
+                try {
+                    if (!p.waitFor(2, TimeUnit.SECONDS)) {
+                        p.destroyForcibly();
+                    }
+                } catch (InterruptedException e) {
+                    p.destroyForcibly();
+                    Thread.currentThread().interrupt();
+                }
+            }
+            if (tun != null) {
+                try {
+                    tun.close();
+                } catch (IOException ignore) {
+                    // déjà fermé
+                }
+                tun = null;
+            }
+            if (fichierConfig != null) {
+                fichierConfig.delete();
+            }
+        }
+    }
+
+    private void etat(EtatVpn e, String message) {
+        SuiviVpn.changer(e, message);
+        Journal.info("État : " + e.name() + (message.isEmpty() ? "" : " — " + message));
+    }
+
+    @SuppressWarnings("deprecation")
+    private Notification notification(int texte, boolean avecBouton) {
+        PendingIntent ouvrir = PendingIntent.getActivity(
+                this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
+        Notification.Builder b = new Notification.Builder(this, CANAL)
+                .setSmallIcon(R.drawable.ic_power)
+                .setContentTitle(getString(R.string.app_name))
+                .setContentText(getString(texte))
+                .setContentIntent(ouvrir)
+                .setOngoing(true);
+        if (avecBouton) {
+            Intent d = new Intent(this, YiwaloVpnService.class).setAction(ACTION_DECONNECTER);
+            PendingIntent pd = PendingIntent.getService(this, 1, d, PendingIntent.FLAG_IMMUTABLE);
+            b.addAction(R.drawable.ic_power, getString(R.string.notif_bouton_deconnecter), pd);
+        }
+        return b.build();
+    }
+
+    private void notifierInfo(int titre, String detail) {
+        Notification.Builder b = new Notification.Builder(this, CANAL)
+                .setSmallIcon(R.drawable.ic_power)
+                .setContentTitle(getString(titre))
+                .setAutoCancel(true)
+                .setTimeoutAfter(10000);
+        if (!detail.isEmpty()) {
+            b.setContentText(detail);
+            b.setStyle(new Notification.BigTextStyle().bigText(detail));
+        }
+        getSystemService(NotificationManager.class).notify(ID_INFO, b.build());
+    }
+}

@@ -1,0 +1,124 @@
+package com.yiwalo.tunnel.ip;
+
+import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioTrack;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import com.yiwalo.tunnel.MainActivity;
+import com.yiwalo.tunnel.R;
+
+public final class AlerteIp {
+    private static final String CANAL = "ip_trouvee_v2";
+    private static final Handler h = new Handler(Looper.getMainLooper());
+    private static AudioTrack piste;
+    private static final Runnable coupure = new Runnable() {
+        @Override public void run() { couper(); }
+    };
+
+    private AlerteIp() { }
+
+    private static void couper() {
+        if (piste != null) {
+            try {
+                piste.stop();
+                piste.release();
+            } catch (RuntimeException ignore) { }
+            piste = null;
+        }
+    }
+
+    private static short[] carillon(int sr) {
+        double[] f = {784.0, 1046.5, 1318.5};
+        int total = sr * 15 / 10;
+        double[] mix = new double[total];
+        for (int k = 0; k < f.length; k++) {
+            int debut = k * sr * 17 / 100;
+            int len = sr * 9 / 10;
+            for (int i = 0; i < len && debut + i < total; i++) {
+                double t = (double) i / sr;
+                double env = Math.exp(-4.5 * t) * Math.min(1.0, i / 150.0);
+                double s = Math.sin(2 * Math.PI * f[k] * t)
+                        + 0.25 * Math.sin(2 * Math.PI * f[k] * 2.76 * t) * Math.exp(-8 * t);
+                mix[debut + i] += s * env;
+            }
+        }
+        short[] b = new short[total];
+        for (int i = 0; i < total; i++) {
+            b[i] = (short) Math.max(-32000, Math.min(32000, mix[i] * 7000));
+        }
+        return b;
+    }
+
+    /** Petit carillon doux, joué une fois sur le volume notification. */
+    public static void sonner(Context c) {
+        couper();
+        try {
+            int sr = 22050;
+            short[] b = carillon(sr);
+            AudioTrack t = new AudioTrack.Builder()
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build())
+                    .setAudioFormat(new AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(sr)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build())
+                    .setBufferSizeInBytes(b.length * 2)
+                    .setTransferMode(AudioTrack.MODE_STATIC)
+                    .build();
+            t.write(b, 0, b.length);
+            t.play();
+            piste = t;
+            h.removeCallbacks(coupure);
+            h.postDelayed(coupure, 2500);
+        } catch (RuntimeException ignore) {
+            // pas de son disponible
+        }
+    }
+
+    public static void declencher(Context c, String ip) {
+        Context app = c.getApplicationContext();
+        if (Build.VERSION.SDK_INT >= 33 && c instanceof Activity
+                && app.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                != PackageManager.PERMISSION_GRANTED) {
+            ((Activity) c).requestPermissions(
+                    new String[]{"android.permission.POST_NOTIFICATIONS"}, 4242);
+        }
+        try {
+            NotificationManager nm = app.getSystemService(NotificationManager.class);
+            NotificationChannel ch = new NotificationChannel(
+                    CANAL, "IP trouvée", NotificationManager.IMPORTANCE_HIGH);
+            ch.enableVibration(true);
+            ch.setVibrationPattern(new long[]{0, 600, 300, 600, 300, 600});
+            ch.setSound(null, null);
+            nm.createNotificationChannel(ch);
+            PendingIntent pi = PendingIntent.getActivity(app, 0,
+                    new Intent(app, MainActivity.class),
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            Notification n = new Notification.Builder(app, CANAL)
+                    .setSmallIcon(R.drawable.ic_power)
+                    .setContentTitle("IP trouvée !")
+                    .setContentText(ip + " est dans ta liste.")
+                    .setContentIntent(pi)
+                    .setAutoCancel(true)
+                    .setCategory(Notification.CATEGORY_ALARM)
+                    .build();
+            nm.notify(7101, n);
+        } catch (RuntimeException ignore) {
+            // notification refusée
+        }
+        sonner(app);
+    }
+}

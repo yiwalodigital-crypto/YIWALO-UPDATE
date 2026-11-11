@@ -1,0 +1,199 @@
+package com.yiwalo.tunnel;
+
+import android.app.AlertDialog;
+import android.content.Context;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.text.InputType;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import com.yiwalo.tunnel.config.ConfigStore;
+import com.yiwalo.tunnel.config.Configuration;
+import com.yiwalo.tunnel.config.TypeConnexion;
+import com.yiwalo.tunnel.vpn.GenerateurSingBox;
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
+/** Formulaire commun Hysteria2 / TUIC. Les identifiants sont gardés dans le lien de la configuration. */
+public final class FormulaireQuic {
+    private FormulaireQuic() {}
+
+    private static String enc(String s) {
+        try {
+            return URLEncoder.encode(s, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            return s;
+        }
+    }
+
+    private static String val(Map<String, String> m, String cle) {
+        String v = m.get(cle);
+        return v == null ? "" : v;
+    }
+
+    private static EditText champ(Context ctx, String indice, String valeur, int type) {
+        return FormulaireSlowDns.champ(ctx, indice, valeur, type);
+    }
+
+    private static TextView aide(Context ctx, String texte) {
+        return FormulaireSlowDns.aide(ctx, texte);
+    }
+
+    private static String t(EditText e) {
+        return FormulaireSlowDns.t(e);
+    }
+
+    private static void erreur(Context ctx, String msg) {
+        FormulaireSlowDns.erreur(ctx, msg);
+    }
+
+    public static void ouvrir(Context ctx, ConfigStore store, Configuration ex,
+                              TypeConnexion type, Runnable apres) {
+        final boolean tuic = type == TypeConnexion.TUIC;
+        final String libelle = tuic ? "TUIC" : "Hysteria2";
+        final int TXT = InputType.TYPE_CLASS_TEXT;
+        final int URI = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI;
+        final int MDP = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD;
+        Map<String, String> m = ex == null ? new HashMap<String, String>()
+                : GenerateurSingBox.parser(ex.lienOriginal);
+
+        LinearLayout racine = new LinearLayout(ctx);
+        racine.setOrientation(LinearLayout.VERTICAL);
+        racine.setPadding(FormulaireSlowDns.dp(ctx, 20), FormulaireSlowDns.dp(ctx, 20),
+                FormulaireSlowDns.dp(ctx, 20), FormulaireSlowDns.dp(ctx, 8));
+
+        TextView titre = new TextView(ctx);
+        titre.setText((ex == null ? "Nouvelle configuration " : "Modifier la configuration ") + libelle);
+        titre.setTextSize(20f);
+        titre.setTypeface(titre.getTypeface(), Typeface.BOLD);
+        titre.setTextColor(ctx.getColor(R.color.texte));
+        racine.addView(titre);
+
+        final EditText nom = champ(ctx, "Nom de la configuration", ex == null ? "" : ex.nom, TXT);
+        racine.addView(nom);
+        racine.addView(aide(ctx, "Nom affiché dans la liste de tes configurations."));
+
+        final EditText hote = champ(ctx, "Adresse du serveur", ex == null ? "" : ex.serveur, URI);
+        racine.addView(hote);
+        racine.addView(aide(ctx, "Domaine ou IP du serveur " + libelle + "."));
+
+        final EditText port = champ(ctx, "Port", ex == null ? "443" : String.valueOf(ex.port),
+                InputType.TYPE_CLASS_NUMBER);
+        racine.addView(port);
+        racine.addView(aide(ctx, "Port UDP du serveur, souvent 443."));
+
+        final EditText uuid;
+        if (tuic) {
+            uuid = champ(ctx, "UUID", val(m, "u"), URI);
+            racine.addView(uuid);
+            racine.addView(aide(ctx, "Identifiant UUID fourni avec ton serveur TUIC."));
+        } else {
+            uuid = null;
+        }
+
+        final EditText mdp = champ(ctx, tuic ? "Mot de passe" : "Mot de passe (auth)",
+                val(m, tuic ? "p" : "info"), MDP);
+        racine.addView(mdp);
+        racine.addView(aide(ctx, "Il est masqué à l'écran."));
+
+        final EditText sni = champ(ctx, "SNI (optionnel)", ex == null ? "" : ex.sniManuel, URI);
+        racine.addView(sni);
+        racine.addView(aide(ctx, "Nom TLS du serveur. Laisse vide pour utiliser l'adresse."));
+
+        final EditText obfs;
+        if (tuic) {
+            obfs = null;
+        } else {
+            obfs = champ(ctx, "Mot de passe obfs (optionnel)", val(m, "obfs-password"), MDP);
+            racine.addView(obfs);
+            racine.addView(aide(ctx, "Obfuscation salamander, seulement si ton serveur l'exige."));
+        }
+
+        final CheckBox insec = new CheckBox(ctx);
+        insec.setText("Autoriser un certificat non vérifié");
+        insec.setTextColor(ctx.getColor(R.color.texte));
+        insec.setChecked(ex != null && ex.certNonVerifie);
+        racine.addView(insec);
+        racine.addView(aide(ctx, "À n'utiliser que pour un serveur de confiance (certificat auto-signé)."));
+
+        final AlertDialog[] dlg = new AlertDialog[1];
+
+        TextView enreg = FormulaireSlowDns.bouton(ctx, "Enregistrer", true);
+        enreg.setOnClickListener(v -> {
+            String n = t(nom), h = t(hote), s = t(sni);
+            String mp = mdp.getText().toString();
+            if (n.isEmpty()) { erreur(ctx, "Le nom est obligatoire."); return; }
+            if (h.isEmpty()) { erreur(ctx, "L'adresse du serveur est obligatoire."); return; }
+            int p;
+            try { p = Integer.parseInt(t(port)); } catch (NumberFormatException e) { p = -1; }
+            if (p < 1 || p > 65535) { erreur(ctx, "Le port doit être entre 1 et 65535."); return; }
+            if (mp.isEmpty()) { erreur(ctx, "Le mot de passe est obligatoire."); return; }
+
+            String lien;
+            if (tuic) {
+                String id = t(uuid);
+                if (!id.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) {
+                    erreur(ctx, "L'UUID n'est pas valide.");
+                    return;
+                }
+                lien = "tuic://" + enc(id) + ":" + enc(mp) + "@" + h + ":" + p;
+            } else {
+                lien = "hysteria2://" + enc(mp) + "@" + h + ":" + p;
+            }
+            StringBuilder q = new StringBuilder();
+            if (!s.isEmpty()) q.append("sni=").append(enc(s));
+            if (insec.isChecked()) {
+                if (q.length() > 0) q.append("&");
+                q.append("insecure=1");
+            }
+            if (!tuic) {
+                String o = obfs.getText().toString();
+                if (!o.isEmpty()) {
+                    if (q.length() > 0) q.append("&");
+                    q.append("obfs=salamander&obfs-password=").append(enc(o));
+                }
+            }
+            if (q.length() > 0) lien = lien + "?" + q;
+
+            Configuration c = new Configuration(
+                    ex != null ? ex.id : UUID.randomUUID().toString(),
+                    n, type, h, p, lien, s);
+            c.certNonVerifie = insec.isChecked();
+            if (ex != null) {
+                c.expireLe = ex.expireLe;
+                c.message = ex.message;
+                c.verrouille = ex.verrouille;
+                c.mobileSeulement = ex.mobileSeulement;
+                c.bloquerRoot = ex.bloquerRoot;
+                c.storeSeulement = ex.storeSeulement;
+                c.appareils = ex.appareils;
+                store.remplacer(c);
+            } else if (!store.ajouter(c)) {
+                erreur(ctx, "Ce nom de configuration existe déjà.");
+                return;
+            }
+            dlg[0].dismiss();
+            apres.run();
+        });
+        racine.addView(enreg);
+
+        TextView annuler = FormulaireSlowDns.bouton(ctx, "ANNULER", false);
+        annuler.setOnClickListener(v -> dlg[0].dismiss());
+        racine.addView(annuler);
+
+        ScrollView sv = new ScrollView(ctx);
+        sv.addView(racine);
+        dlg[0] = new AlertDialog.Builder(ctx).setView(sv).create();
+        dlg[0].show();
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(ctx.getColor(R.color.carte));
+        bg.setCornerRadius(FormulaireSlowDns.dp(ctx, 20));
+        dlg[0].getWindow().setBackgroundDrawable(bg);
+    }
+}

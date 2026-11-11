@@ -1,0 +1,308 @@
+package com.yiwalo.tunnel;
+
+import android.content.Context;
+import android.net.Network;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
+/** Teste un hôte sur tous les réseaux disponibles (Orange, Moov, Wi-Fi) en même temps. */
+final class HostCheckerView extends LinearLayout {
+
+    private static final class Mesure {
+        String reseau = "";
+        int niveau;                 // 0 = bloqué, 1 = partiel, 2 = fonctionne
+        String statut = "Bloqué";
+        int couleur = Ui.ROUGE;
+        String ip = "—";
+        String dns = "—";
+        String tcp = "—";
+        String http = "—";
+        long tcpMs = Long.MAX_VALUE;
+    }
+
+    private final Context ctx;
+    private final Handler h = new Handler(Looper.getMainLooper());
+    private volatile boolean attache = true;
+    private boolean enCours;
+
+    private final EditText champ;
+    private final TextView bouton, vStatut, vHote, vDiag;
+    private final LinearLayout carteResultat, blocReseaux;
+    private final TextView vIp, vDns, vTcp, vHttp;
+
+    HostCheckerView(final Context ctx, Runnable retour) {
+        super(ctx);
+        this.ctx = ctx;
+        setOrientation(VERTICAL);
+        addView(Ui.entete(ctx, "Host checker", retour));
+
+        int p = Ui.dp(ctx, 16);
+        LinearLayout saisie = Ui.carte(ctx);
+        saisie.setPadding(p, p, p, p);
+        saisie.addView(Ui.texte(ctx, "HÔTE À TESTER", 12f, Ui.DISCRET, true));
+        champ = Ui.champ(ctx, "ex. google.com ou serveur.com:443", "");
+        champ.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        champ.setOnEditorActionListener((v, a, e) -> {
+            if (a == EditorInfo.IME_ACTION_DONE) { verifier(); return true; }
+            return false;
+        });
+        saisie.addView(champ);
+        TextView aide = Ui.texte(ctx,
+                "Teste DNS, TCP et HTTPS sur tous les réseaux (Orange, Moov, Wi-Fi) en même temps. "
+                        + "Avec « hôte:port », seul le TCP est testé.",
+                12f, Ui.DISCRET, false);
+        aide.setPadding(0, Ui.dp(ctx, 8), 0, 0);
+        saisie.addView(aide);
+        bouton = Ui.bouton(ctx, "Checker", Ui.VERT, this::verifier);
+        saisie.addView(bouton);
+        addView(saisie);
+
+        carteResultat = Ui.carte(ctx);
+        carteResultat.setVisibility(GONE);
+        LinearLayout tete = new LinearLayout(ctx);
+        tete.setOrientation(VERTICAL);
+        tete.setPadding(p, p, p, Ui.dp(ctx, 8));
+        vStatut = Ui.texte(ctx, "", 26f, Ui.TEXTE, true);
+        vHote = Ui.texte(ctx, "", 14f, Ui.DISCRET, false);
+        tete.addView(vStatut);
+        tete.addView(vHote);
+        carteResultat.addView(tete);
+        carteResultat.addView(Ui.separateur(ctx));
+        vIp = ligne("Adresse IP");
+        vDns = ligne("Résolution DNS");
+        vTcp = ligne("Connexion TCP");
+        vHttp = ligne("Réponse HTTPS");
+
+        blocReseaux = new LinearLayout(ctx);
+        blocReseaux.setOrientation(VERTICAL);
+        carteResultat.addView(blocReseaux);
+
+        vDiag = Ui.texte(ctx, "", 11f, Ui.DISCRET, false);
+        vDiag.setPadding(p, Ui.dp(ctx, 8), p, p);
+        carteResultat.addView(vDiag);
+        addView(carteResultat);
+    }
+
+    private TextView ligne(String label) {
+        LinearLayout r = Ui.info(ctx, label, "—");
+        carteResultat.addView(r);
+        return (TextView) r.getChildAt(1);
+    }
+
+    private void verifier() {
+        if (enCours) return;
+        String s = champ.getText().toString().trim().toLowerCase(Locale.ROOT);
+        s = s.replaceFirst("^https?://", "");
+        int slash = s.indexOf('/');
+        if (slash > 0) s = s.substring(0, slash);
+        if (s.isEmpty() || s.contains(" ")) {
+            Toast.makeText(ctx, "Entre un hôte valide", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        InputMethodManager im =
+                (InputMethodManager) ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (im != null) im.hideSoftInputFromWindow(champ.getWindowToken(), 0);
+
+        enCours = true;
+        bouton.setText("Test en cours…");
+        carteResultat.setVisibility(VISIBLE);
+        vStatut.setText("…");
+        vStatut.setTextColor(Ui.DISCRET);
+        vHote.setText(s);
+        vIp.setText("—");
+        vDns.setText("—");
+        vTcp.setText("—");
+        vHttp.setText("—");
+        blocReseaux.removeAllViews();
+        vDiag.setText("");
+        final String cible = s;
+        new Thread(() -> tester(cible), "yiwalo-host-check").start();
+    }
+
+    private void afficher(final Mesure meilleure, final List<Mesure> toutes, final String diag) {
+        h.post(() -> {
+            enCours = false;
+            if (!attache) return;
+            bouton.setText("Checker");
+            vStatut.setText(meilleure.statut);
+            vStatut.setTextColor(meilleure.couleur);
+            vIp.setText(meilleure.ip);
+            vDns.setText(meilleure.dns);
+            vTcp.setText(meilleure.tcp);
+            vHttp.setText(meilleure.http);
+            blocReseaux.removeAllViews();
+            if (toutes.size() > 1) {
+                int p = Ui.dp(ctx, 16);
+                blocReseaux.addView(Ui.separateur(ctx));
+                TextView titre = Ui.texte(ctx, "PAR RÉSEAU", 11f, Ui.DISCRET, true);
+                titre.setPadding(p, Ui.dp(ctx, 10), p, 0);
+                blocReseaux.addView(titre);
+                for (Mesure m : toutes) {
+                    String resume = m.statut;
+                    if (m.niveau > 0) {
+                        resume += " · TCP " + m.tcp;
+                        if (!"—".equals(m.http) && !"Non testé".equals(m.http)) {
+                            resume += " · " + m.http;
+                        }
+                    }
+                    LinearLayout r = Ui.info(ctx, m.reseau, resume);
+                    ((TextView) r.getChildAt(1)).setTextColor(m.couleur);
+                    blocReseaux.addView(r);
+                }
+            }
+            vDiag.setText(diag);
+        });
+    }
+
+    private void tester(String saisie) {
+        String hote = saisie;
+        int port = 443;
+        boolean tcpSeul = false;
+        int i = saisie.lastIndexOf(':');
+        if (i > 0 && saisie.indexOf(':') == i) {
+            try {
+                port = Integer.parseInt(saisie.substring(i + 1));
+                hote = saisie.substring(0, i);
+                tcpSeul = true;
+            } catch (NumberFormatException ignore) {
+                // pas de port
+            }
+        }
+        final String h0 = hote;
+        final int p0 = port;
+        final boolean seul = tcpSeul;
+
+        List<TestConfigsView.Reseau> reseaux;
+        try {
+            reseaux = TestConfigsView.reseauxActifs(ctx);
+        } catch (RuntimeException e) {
+            reseaux = new ArrayList<>();
+        }
+        final List<Mesure> toutes = new ArrayList<>();
+        ExecutorService ex = Executors.newCachedThreadPool();
+        try {
+            List<Future<Mesure>> fs = new ArrayList<>();
+            if (reseaux.isEmpty()) {
+                fs.add(ex.submit(() -> mesurer(null, "Réseau par défaut", h0, p0, seul)));
+            } else {
+                for (final TestConfigsView.Reseau r : reseaux) {
+                    fs.add(ex.submit(() -> mesurer(r.net, r.nom, h0, p0, seul)));
+                }
+            }
+            for (Future<Mesure> f : fs) {
+                try {
+                    toutes.add(f.get());
+                } catch (Exception e) {
+                    Mesure m = new Mesure();
+                    m.reseau = "réseau";
+                    m.statut = "Erreur";
+                    toutes.add(m);
+                }
+            }
+        } finally {
+            ex.shutdown();
+        }
+
+        Mesure meilleure = toutes.get(0);
+        for (Mesure m : toutes) {
+            if (m.niveau > meilleure.niveau
+                    || (m.niveau == meilleure.niveau && m.tcpMs < meilleure.tcpMs)) {
+                meilleure = m;
+            }
+        }
+        String diag = "Réseaux testés : "
+                + (TestConfigsView.RESEAUX_DETECTES.isEmpty() ? "réseau par défaut"
+                : TestConfigsView.RESEAUX_DETECTES)
+                + "\nSIM : " + (TestConfigsView.DIAG_SIM.isEmpty() ? "-" : TestConfigsView.DIAG_SIM);
+        afficher(meilleure, toutes, diag);
+    }
+
+    /** Test complet DNS + TCP + HTTPS sur un réseau précis (null = réseau par défaut). */
+    private Mesure mesurer(Network net, String nom, String hote, int port, boolean tcpSeul) {
+        Mesure m = new Mesure();
+        m.reseau = nom;
+        long t0 = System.nanoTime();
+        InetAddress adr;
+        try {
+            adr = net != null ? net.getByName(hote) : InetAddress.getByName(hote);
+        } catch (Exception e) {
+            m.statut = "Hôte introuvable";
+            m.dns = "Échec";
+            return m;
+        }
+        m.dns = (System.nanoTime() - t0) / 1000000L + " ms";
+        m.ip = adr.getHostAddress();
+
+        long t1 = System.nanoTime();
+        Socket s = null;
+        try {
+            s = net != null ? net.getSocketFactory().createSocket() : new Socket();
+            s.connect(new InetSocketAddress(adr, port), 5000);
+        } catch (Exception e) {
+            m.statut = "Bloqué";
+            m.tcp = "Refusé ou expiré (:" + port + ")";
+            return m;
+        } finally {
+            if (s != null) {
+                try { s.close(); } catch (Exception ignore) { }
+            }
+        }
+        m.tcpMs = (System.nanoTime() - t1) / 1000000L;
+        m.tcp = m.tcpMs + " ms";
+        if (tcpSeul) {
+            m.niveau = 2;
+            m.statut = "Fonctionne";
+            m.couleur = Ui.VERT;
+            m.http = "Non testé";
+            return m;
+        }
+
+        long t2 = System.nanoTime();
+        HttpURLConnection c = null;
+        try {
+            URL u = new URL("https://" + hote + "/");
+            c = (HttpURLConnection) (net != null ? net.openConnection(u) : u.openConnection());
+            c.setConnectTimeout(6000);
+            c.setReadTimeout(6000);
+            c.setInstanceFollowRedirects(false);
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) HostChecker");
+            int code = c.getResponseCode();
+            long http = (System.nanoTime() - t2) / 1000000L;
+            m.niveau = 2;
+            m.statut = "Fonctionne";
+            m.couleur = http > 2000 ? Ui.ORANGE : Ui.VERT;
+            m.http = "HTTP " + code + " · " + http + " ms";
+        } catch (Exception e) {
+            m.niveau = 1;
+            m.statut = "Partiel";
+            m.couleur = Ui.ORANGE;
+            m.http = "Pas de réponse HTTPS";
+        } finally {
+            if (c != null) c.disconnect();
+        }
+        return m;
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        attache = false;
+        super.onDetachedFromWindow();
+    }
+}

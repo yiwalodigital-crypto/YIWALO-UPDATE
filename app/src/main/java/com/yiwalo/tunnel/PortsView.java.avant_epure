@@ -1,0 +1,714 @@
+package com.yiwalo.tunnel;
+
+import android.content.Context;
+import android.content.res.ColorStateList;
+import android.graphics.drawable.GradientDrawable;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+import android.os.Handler;
+import android.os.Looper;
+import java.io.IOException;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.TreeSet;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/** Testeur de ports TCP : indique quels ports d'un hôte ou d'une IP sont ouverts. */
+final class PortsView extends LinearLayout {
+    private static final int DELAI_MS = 1500;
+    private static final int FILS = 150;
+    private static final int FOND_CHAMP = 0xFF1E2A44;
+
+    private static final int[] PORTS_EN_PLUS = {
+            1080, 1194, 1433, 1521, 1723, 1883, 2049, 2052, 2053, 2082, 2083, 2086, 2087, 2095,
+            2096, 2375, 3000, 3128, 3306, 3389, 4500, 5000, 5060, 5222, 5353, 5432, 5601, 5672,
+            5900, 6379, 6443, 7000, 7001, 8000, 8008, 8080, 8081, 8083, 8088, 8118, 8123, 8388,
+            8443, 8444, 8880, 8888, 9000, 9001, 9090, 9200, 9418, 10000, 10443, 11211, 27017,
+            50000, 51820};
+
+    private static final Map<Integer, String> SERVICES = new HashMap<>();
+
+    static {
+        SERVICES.put(20, "FTP (données)");
+        SERVICES.put(21, "FTP");
+        SERVICES.put(22, "SSH");
+        SERVICES.put(23, "Telnet");
+        SERVICES.put(25, "SMTP");
+        SERVICES.put(53, "DNS");
+        SERVICES.put(80, "HTTP");
+        SERVICES.put(110, "POP3");
+        SERVICES.put(143, "IMAP");
+        SERVICES.put(443, "HTTPS");
+        SERVICES.put(465, "SMTPS");
+        SERVICES.put(500, "IPsec (IKE)");
+        SERVICES.put(587, "SMTP (soumission)");
+        SERVICES.put(993, "IMAPS");
+        SERVICES.put(995, "POP3S");
+        SERVICES.put(1080, "SOCKS");
+        SERVICES.put(1194, "OpenVPN");
+        SERVICES.put(2052, "HTTP (Cloudflare)");
+        SERVICES.put(2053, "HTTPS (Cloudflare)");
+        SERVICES.put(2082, "HTTP (Cloudflare)");
+        SERVICES.put(2083, "HTTPS (Cloudflare)");
+        SERVICES.put(2086, "HTTP (Cloudflare)");
+        SERVICES.put(2087, "HTTPS (Cloudflare)");
+        SERVICES.put(2095, "HTTP (Cloudflare)");
+        SERVICES.put(2096, "HTTPS (Cloudflare)");
+        SERVICES.put(3306, "MySQL");
+        SERVICES.put(3389, "Bureau à distance (RDP)");
+        SERVICES.put(4500, "IPsec (NAT-T)");
+        SERVICES.put(5432, "PostgreSQL");
+        SERVICES.put(8000, "HTTP alternatif");
+        SERVICES.put(8080, "HTTP alternatif");
+        SERVICES.put(8443, "HTTPS alternatif");
+        SERVICES.put(8880, "HTTP alternatif");
+        SERVICES.put(8888, "HTTP alternatif");
+        SERVICES.put(51820, "WireGuard");
+    }
+
+    private final Context ctx;
+    private final Handler h = new Handler(Looper.getMainLooper());
+    private volatile int gen;
+    private boolean enCours;
+
+    private final EditText champHote;
+    private final TextView bouton, resume, progression, erreurVue;
+    private final ProgressBar barre;
+    private final LinearLayout liste;
+
+    private final AtomicInteger fait = new AtomicInteger();
+    private final AtomicInteger ouverts = new AtomicInteger();
+    private final AtomicInteger injoignables = new AtomicInteger();
+    private final AtomicInteger refuses = new AtomicInteger();
+    private final AtomicInteger autres = new AtomicInteger();
+    private volatile String derniereErreur;
+        private final List<double[]> ouvertsListe = new ArrayList<>();
+    private int lignesAffichees = -1;
+
+    PortsView(Context ctx, Runnable retour) {
+        super(ctx);
+        this.ctx = ctx;
+        setOrientation(VERTICAL);
+        setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 8), Ui.dp(ctx, 16), Ui.dp(ctx, 24));
+        addView(Ui.entete(ctx, "Testeur de ports", retour));
+
+        // ---- Saisie
+        LinearLayout saisie = Ui.carte(ctx);
+        saisie.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 16));
+        saisie.addView(etiquette("HÔTE OU ADRESSE IP"));
+        champHote = champ("exemple.com ou 1.1.1.1",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        champHote.setImeOptions(EditorInfo.IME_ACTION_GO);
+        champHote.setOnEditorActionListener((v, action, ev) -> {
+            if (!enCours) demarrer();
+            return true;
+        });
+        saisie.addView(champHote, marge(8));
+
+        bouton = Ui.bouton(ctx, "Scanner les ports", Ui.BLEU, this::basculer);
+        saisie.addView(bouton);
+        ViewGroup.LayoutParams bl = bouton.getLayoutParams();
+        if (bl instanceof ViewGroup.MarginLayoutParams) {
+            ((ViewGroup.MarginLayoutParams) bl).topMargin = Ui.dp(ctx, 14);
+        }
+        addView(saisie);
+
+        // ---- Résultats
+        LinearLayout res = Ui.carte(ctx);
+        LinearLayout.LayoutParams rp = (LinearLayout.LayoutParams) res.getLayoutParams();
+        rp.topMargin = Ui.dp(ctx, 12);
+        res.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 16), Ui.dp(ctx, 16), Ui.dp(ctx, 12));
+
+        resume = Ui.texte(ctx, "—", 26f, Ui.TEXTE, true);
+        res.addView(resume);
+        progression = Ui.texte(ctx,
+                "Indique un hôte ou une IP : seuls les ports ouverts s'affichent.", 13f, Ui.DISCRET, false);
+        res.addView(progression, marge(4));
+
+        barre = new ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal);
+        barre.setIndeterminate(false);
+        barre.setProgressTintList(ColorStateList.valueOf(Ui.BLEU));
+        barre.setProgressBackgroundTintList(ColorStateList.valueOf(Ui.BORD));
+        barre.setVisibility(GONE);
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(ctx, 6));
+        bp.topMargin = Ui.dp(ctx, 12);
+        res.addView(barre, bp);
+
+        erreurVue = Ui.texte(ctx, "", 13f, Ui.ROUGE, false);
+        erreurVue.setVisibility(GONE);
+        res.addView(erreurVue, marge(10));
+
+        liste = new LinearLayout(ctx);
+        liste.setOrientation(VERTICAL);
+        res.addView(liste, marge(6));
+        addView(res);
+    }
+
+    // ---------- Fabrique de composants
+
+    private TextView etiquette(String t) {
+        TextView v = Ui.texte(ctx, t, 11f, Ui.DISCRET, true);
+        v.setLetterSpacing(0.1f);
+        return v;
+    }
+
+    private LinearLayout.LayoutParams marge(int haut) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.topMargin = Ui.dp(ctx, haut);
+        return p;
+    }
+
+    private EditText champ(String indice, int type) {
+        EditText e = new EditText(ctx);
+        e.setHint(indice);
+        e.setHintTextColor(Ui.DISCRET);
+        e.setTextColor(Ui.TEXTE);
+        e.setTextSize(16f);
+        e.setSingleLine(true);
+        e.setInputType(type);
+        e.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        e.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 12));
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(FOND_CHAMP);
+        g.setCornerRadius(Ui.dp(ctx, 12));
+        g.setStroke(Ui.dp(ctx, 1), Ui.BORD);
+        e.setBackground(g);
+        return e;
+    }
+
+    // ---------- Analyse de la saisie
+
+    private static String nettoyer(String s) {
+        s = s == null ? "" : s.trim();
+        s = s.replaceFirst("^[a-zA-Z][a-zA-Z0-9+.-]*://", "");
+        int slash = s.indexOf('/');
+        if (slash >= 0) s = s.substring(0, slash);
+        int deux = s.indexOf(':');
+        if (deux >= 0 && deux == s.lastIndexOf(':')) s = s.substring(0, deux);
+        if (s.isEmpty()) throw new IllegalArgumentException("Indique un hôte ou une adresse IP.");
+        return s;
+    }
+
+    /** Ports 1-1024 et les ports usuels des services, des proxys et des tunnels. */
+    private static int[] portsATester() {
+        TreeSet<Integer> set = new TreeSet<>();
+        for (int p = 1; p <= 1024; p++) set.add(p);
+        for (int p : PORTS_EN_PLUS) set.add(p);
+        int[] r = new int[set.size()];
+        int i = 0;
+        for (int p : set) r[i++] = p;
+        return r;
+    }
+
+    // ---------- Pilotage
+
+    // ---------- Moteur de scan : tous les réseaux (Orange, Moov, Wi-Fi) en même temps
+
+    private static final class Cible {
+        final int idx;
+        final android.net.Network net;
+        final String nom;
+        final InetAddress adr;
+        volatile int delai = 1500;
+
+        Cible(int idx, android.net.Network net, String nom, InetAddress adr) {
+            this.idx = idx;
+            this.net = net;
+            this.nom = nom;
+            this.adr = adr;
+        }
+    }
+
+    private volatile List<String> nomsReseaux = new ArrayList<>();
+    private volatile int[] ouvertsParReseau = new int[0];
+
+    private static InetAddress choisir(InetAddress[] toutes) {
+        InetAddress choix = toutes[0];
+        for (InetAddress a : toutes) {
+            if (a instanceof Inet4Address) {
+                choix = a;
+                break;
+            }
+        }
+        return choix;
+    }
+
+    private Socket nouvelleSocket(android.net.Network n) {
+        Socket s = new Socket();
+        if (n != null) {
+            try {
+                n.bindSocket(s);
+            } catch (IOException | RuntimeException ignore) {
+                // on garde le réseau par défaut
+            }
+        }
+        return s;
+    }
+
+    private void noterOuvert(Cible c, int port, double ms) {
+        synchronized (ouvertsListe) {
+            double[] trouve = null;
+            for (double[] x : ouvertsListe) {
+                if ((int) x[0] == port) {
+                    trouve = x;
+                    break;
+                }
+            }
+            if (trouve == null) {
+                ouvertsListe.add(new double[]{port, ms, 1 << c.idx});
+                ouverts.incrementAndGet();
+            } else {
+                if (ms < trouve[1]) trouve[1] = ms;
+                trouve[2] = ((int) trouve[2]) | (1 << c.idx);
+            }
+            int[] cpt = ouvertsParReseau;
+            if (c.idx < cpt.length) cpt[c.idx]++;
+        }
+    }
+
+    private void lancerScan(final int g, final String hote, final int[] ports) {
+        new Thread(() -> {
+            final long t0 = System.nanoTime();
+            try {
+                List<TestConfigsView.Reseau> rs;
+                try {
+                    rs = TestConfigsView.reseauxActifs(ctx);
+                } catch (RuntimeException e) {
+                    rs = new ArrayList<>();
+                }
+                final List<Cible> cibles = new ArrayList<>();
+                for (TestConfigsView.Reseau r : rs) {
+                    try {
+                        cibles.add(new Cible(cibles.size(), r.net, r.nom,
+                                choisir(r.net.getAllByName(hote))));
+                    } catch (UnknownHostException | RuntimeException ignore) {
+                        // ce réseau ne résout pas l'hôte : il est ignoré
+                    }
+                }
+                if (cibles.isEmpty()) {
+                    cibles.add(new Cible(0, null, "Réseau par défaut",
+                            choisir(InetAddress.getAllByName(hote))));
+                }
+                final int n = cibles.size();
+                final int total = ports.length * n;
+                final List<String> noms = new ArrayList<>();
+                for (Cible c : cibles) noms.add(c.nom);
+                synchronized (ouvertsListe) {
+                    nomsReseaux = noms;
+                    ouvertsParReseau = new int[n];
+                }
+                final String adrAffichee = cibles.get(0).adr.getHostAddress();
+                final String listeNoms = n > 1 ? TextUtilsJoin(noms) : noms.get(0);
+                if (g != gen) return;
+                h.post(() -> {
+                    if (g != gen) return;
+                    barre.setMax(total);
+                    resume.setText("0 port ouvert");
+                    progression.setText(hote + " · " + adrAffichee + " · " + listeNoms
+                            + " · calibrage…");
+                });
+
+                final int fils = Math.max(40, FILS / n);
+                final int[] nbDelais = new int[n];
+                ExecutorService par = Executors.newFixedThreadPool(n);
+                for (final Cible c : cibles) {
+                    par.execute(() -> {
+                        try {
+                            nbDelais[c.idx] = scannerCible(g, c, ports, fils);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    });
+                }
+                par.shutdown();
+                while (!par.awaitTermination(150, TimeUnit.MILLISECONDS)) {
+                    if (g != gen) {
+                        par.shutdownNow();
+                        return;
+                    }
+                    majUi(g, total, hote, adrAffichee, 0, false);
+                }
+                if (g != gen) return;
+
+                int nbDelaisTotal = 0;
+                for (int x : nbDelais) nbDelaisTotal += x;
+                final int nbOuverts = ouverts.get();
+                final StringBuilder parReseau = new StringBuilder();
+                if (n > 1) {
+                    int[] cpt = ouvertsParReseau;
+                    for (int i = 0; i < n && i < cpt.length; i++) {
+                        parReseau.append("\n").append(noms.get(i)).append(" : ")
+                                .append(cpt[i]).append(" port(s) ouvert(s)");
+                    }
+                }
+                final String diag = "\nOuverts " + nbOuverts + " · refusés " + refuses.get()
+                        + " · sans réponse " + nbDelaisTotal + " · injoignables "
+                        + injoignables.get() + " · autres " + autres.get()
+                        + (derniereErreur != null ? "\n" + derniereErreur : "")
+                        + parReseau
+                        + "\nRéseaux testés : " + (TestConfigsView.RESEAUX_DETECTES.isEmpty()
+                        ? "aucun" : TestConfigsView.RESEAUX_DETECTES)
+                        + "\nSIM : " + (TestConfigsView.DIAG_SIM.isEmpty() ? "-" : TestConfigsView.DIAG_SIM)
+                        + (SuiviVpn.etat() == EtatVpn.CONNECTE
+                        ? "\nVPN connecté : le scan passe peut-être par le tunnel." : "");
+                final boolean suspect = nbOuverts > ports.length * 6 / 10;
+                lignesAffichees = -1;
+                majUi(g, total, hote, adrAffichee, (System.nanoTime() - t0) / 1e9, true);
+                h.post(() -> {
+                    if (g != gen) return;
+                    progression.setText(progression.getText() + diag);
+                    if (suspect) {
+                        montrerErreur("Ce réseau accepte presque toutes les connexions "
+                                + "(proxy de l'opérateur) : les ports ouverts ne sont pas fiables.");
+                    }
+                });
+            } catch (UnknownHostException e) {
+                h.post(() -> {
+                    if (g != gen) return;
+                    enCours = false;
+                    barre.setVisibility(GONE);
+                    resume.setText("—");
+                    progression.setText(hote);
+                    montrerErreur("Hôte introuvable : vérifie le nom ou l'adresse IP.");
+                    bouton.setText("Réessayer");
+                    bouton.setBackground(Ui.fond(ctx, Ui.BLEU, 12, 0));
+                });
+            } catch (Exception e) {
+                final String m = e.getMessage() != null ? e.getMessage()
+                        : e.getClass().getSimpleName();
+                h.post(() -> {
+                    if (g != gen) return;
+                    enCours = false;
+                    barre.setVisibility(GONE);
+                    montrerErreur(m);
+                    bouton.setText("Réessayer");
+                    bouton.setBackground(Ui.fond(ctx, Ui.BLEU, 12, 0));
+                });
+            }
+        }, "yiwalo-ports").start();
+    }
+
+    private static String TextUtilsJoin(List<String> l) {
+        StringBuilder sb = new StringBuilder();
+        for (String s : l) {
+            if (sb.length() > 0) sb.append(" + ");
+            sb.append(s);
+        }
+        return sb.toString();
+    }
+
+    /** Scan complet d'un réseau : balayage, nouvel essai des ports usuels, mesure précise. */
+    private int scannerCible(final int g, final Cible c, final int[] ports, int fils)
+            throws InterruptedException {
+        c.delai = calibrer(c);
+        if (g != gen) return 0;
+        final java.util.concurrent.ConcurrentLinkedQueue<Integer> expires =
+                new java.util.concurrent.ConcurrentLinkedQueue<>();
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(fils, ports.length));
+        for (final int p : ports) {
+            pool.execute(() -> {
+                if (g == gen && sonderTcp(c, p, c.delai) < 0) expires.add(p);
+                fait.incrementAndGet();
+            });
+        }
+        pool.shutdown();
+        while (!pool.awaitTermination(150, TimeUnit.MILLISECONDS)) {
+            if (g != gen) {
+                pool.shutdownNow();
+                return 0;
+            }
+        }
+        if (g != gen) return 0;
+        final int nbDelais = expires.size();
+
+        List<Integer> reessai = new ArrayList<>();
+        for (int p : expires) {
+            if (estUsuel(p)) reessai.add(p);
+        }
+        if (!reessai.isEmpty()) {
+            ExecutorService p2 = Executors.newFixedThreadPool(Math.min(60, reessai.size()));
+            final int delai2 = Math.min(4000, c.delai * 2);
+            for (final int p : reessai) {
+                p2.execute(() -> {
+                    if (g == gen) sonderTcp(c, p, delai2);
+                });
+            }
+            p2.shutdown();
+            p2.awaitTermination(15, TimeUnit.SECONDS);
+        }
+        if (g != gen) return nbDelais;
+        affiner(c, g);
+        return nbDelais;
+    }
+
+    /** Délai adapté au réseau : on mesure le temps de réponse de l'hôte sur le port 443. */
+    private int calibrer(Cible c) {
+        Socket s = nouvelleSocket(c.net);
+        long t0 = System.nanoTime();
+        try {
+            s.connect(new InetSocketAddress(c.adr, 443), 1500);
+        } catch (SocketTimeoutException e) {
+            return 2200;
+        } catch (IOException e) {
+            // refusé : le temps de réponse sert quand même
+        } finally {
+            try {
+                s.close();
+            } catch (IOException ignore) {
+                // fermeture sans importance
+            }
+        }
+        long rtt = (System.nanoTime() - t0) / 1000000L;
+        return (int) Math.max(1200, Math.min(3500, rtt * 4 + 500));
+    }
+
+    /** 1 = ouvert, 0 = fermé ou refusé, -1 = sans réponse (délai dépassé). */
+    private int sonderTcp(Cible c, int port, int delai) {
+        long t0 = System.nanoTime();
+        Socket s = nouvelleSocket(c.net);
+        try {
+            s.connect(new InetSocketAddress(c.adr, port), delai);
+            noterOuvert(c, port, (System.nanoTime() - t0) / 1e6);
+            return 1;
+        } catch (SocketTimeoutException e) {
+            return -1;
+        } catch (IOException e) {
+            String m = e.getMessage() == null ? "" : e.getMessage().toLowerCase(Locale.ROOT);
+            if (m.contains("unreachable") || m.contains("no route")) {
+                injoignables.incrementAndGet();
+            } else if (m.contains("refused")) {
+                refuses.incrementAndGet();
+            } else {
+                autres.incrementAndGet();
+                if (derniereErreur == null) derniereErreur = e.toString();
+            }
+            return 0;
+        } finally {
+            try {
+                s.close();
+            } catch (IOException ignore) {
+                // fermeture sans importance
+            }
+        }
+    }
+
+    private static boolean estUsuel(int port) {
+        if (SERVICES.containsKey(port)) return true;
+        for (int p : PORTS_EN_PLUS) {
+            if (p == port) return true;
+        }
+        return false;
+    }
+
+    /** Mesure précise : 3 connexions successives par port ouvert, on garde la plus rapide. */
+    private void affiner(final Cible c, final int g) throws InterruptedException {
+        final List<double[]> copie = new ArrayList<>();
+        synchronized (ouvertsListe) {
+            for (double[] e : ouvertsListe) {
+                if ((((int) e[2]) & (1 << c.idx)) != 0) copie.add(e);
+            }
+        }
+        if (copie.isEmpty()) return;
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(8, copie.size()));
+        for (final double[] e : copie) {
+            pool.execute(() -> {
+                int port = (int) e[0];
+                double meilleur = Double.MAX_VALUE;
+                for (int k = 0; k < 3 && g == gen; k++) {
+                    Socket s = nouvelleSocket(c.net);
+                    try {
+                        long t1 = System.nanoTime();
+                        s.connect(new InetSocketAddress(c.adr, port), c.delai);
+                        double ms = (System.nanoTime() - t1) / 1e6;
+                        if (ms < meilleur) meilleur = ms;
+                    } catch (IOException ignore) {
+                        // on garde la mesure précédente
+                    } finally {
+                        try {
+                            s.close();
+                        } catch (IOException ignore2) {
+                            // fermeture sans importance
+                        }
+                    }
+                }
+                synchronized (ouvertsListe) {
+                    if (meilleur < e[1]) e[1] = meilleur;
+                }
+            });
+        }
+        pool.shutdown();
+        pool.awaitTermination(10, TimeUnit.SECONDS);
+    }
+
+    private void basculer() {
+        if (enCours) arreter(); else demarrer();
+    }
+
+    private void arreter() {
+        gen++;
+        enCours = false;
+        barre.setVisibility(GONE);
+        progression.setText("Test arrêté.");
+        bouton.setText("Scanner à nouveau");
+        bouton.setBackground(Ui.fond(ctx, Ui.BLEU, 12, 0));
+    }
+
+    private void montrerErreur(String m) {
+        erreurVue.setText(m);
+        erreurVue.setVisibility(VISIBLE);
+    }
+
+    private void demarrer() {
+        final String hote;
+        final int[] ports;
+        erreurVue.setVisibility(GONE);
+        try {
+            hote = nettoyer(champHote.getText().toString());
+            ports = portsATester();
+        } catch (IllegalArgumentException e) {
+            montrerErreur(e.getMessage());
+            return;
+        }
+        try {
+            InputMethodManager imm = (InputMethodManager)
+                    ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.hideSoftInputFromWindow(champHote.getWindowToken(), 0);
+        } catch (RuntimeException ignore) {
+            // clavier déjà fermé
+        }
+
+        final int g = ++gen;
+        enCours = true;
+        fait.set(0);
+        ouverts.set(0);
+        injoignables.set(0); refuses.set(0); autres.set(0); derniereErreur = null;
+        synchronized (ouvertsListe) {
+            ouvertsListe.clear();
+        }
+        lignesAffichees = -1;
+        liste.removeAllViews();
+        resume.setText("Résolution…");
+        resume.setTextColor(Ui.TEXTE);
+        progression.setText(hote);
+        barre.setMax(ports.length);
+        barre.setProgress(0);
+        barre.setVisibility(VISIBLE);
+        bouton.setText("Arrêter");
+        bouton.setBackground(Ui.fond(ctx, Ui.ROUGE, 12, 0));
+
+        lancerScan(g, hote, ports);
+    }
+
+    private static int couleurMs(double ms) {
+        return ms <= 100 ? Ui.VERT : ms <= 300 ? Ui.ORANGE : Ui.ROUGE;
+    }
+
+    private void majUi(final int g, final int total, final String hote, final String adr,
+                       final double duree, final boolean fini) {
+        final int f = fait.get();
+        final int o = ouverts.get();
+        final int inj = injoignables.get();
+        final List<double[]> copie;
+        synchronized (ouvertsListe) {
+            copie = new ArrayList<>(ouvertsListe);
+        }
+        Collections.sort(copie, (a, b) -> Double.compare(a[0], b[0]));
+        h.post(() -> {
+            if (g != gen) return;
+            barre.setProgress(Math.min(f, total));
+            if (fini) {
+                resume.setText(o == 0 ? "Aucun port ouvert"
+                        : o + (o > 1 ? " ports ouverts" : " port ouvert"));
+                resume.setTextColor(o == 0 ? Ui.ROUGE : Ui.VERT);
+                progression.setText(hote + " · " + adr + " · " + TextUtilsJoin(nomsReseaux) + " · "
+                        + String.format(Locale.getDefault(), "%.1f s", duree));
+                barre.setVisibility(GONE);
+                bouton.setText("Scanner à nouveau");
+                bouton.setBackground(Ui.fond(ctx, Ui.BLEU, 12, 0));
+                enCours = false;
+                if (o == 0) {
+                    montrerErreur(inj >= total / 2
+                            ? "Réseau injoignable : vérifie ta connexion Internet."
+                            : "Aucune réponse : tous les ports sont fermés ou filtrés par un "
+                            + "pare-feu.");
+                }
+            } else {
+                resume.setText(o + (o > 1 ? " ports ouverts" : " port ouvert"));
+                resume.setTextColor(o > 0 ? Ui.VERT : Ui.TEXTE);
+                progression.setText("Analyse en cours · " + f + " / " + total);
+            }
+            if (copie.size() != lignesAffichees) {
+                lignesAffichees = copie.size();
+                afficherOuverts(copie);
+            }
+        });
+    }
+
+    private void afficherOuverts(List<double[]> l) {
+        liste.removeAllViews();
+        for (int i = 0; i < l.size(); i++) {
+            int port = (int) l.get(i)[0];
+            double ms = l.get(i)[1];
+            LinearLayout ligne = new LinearLayout(ctx);
+            ligne.setOrientation(HORIZONTAL);
+            ligne.setGravity(Gravity.CENTER_VERTICAL);
+            ligne.setPadding(0, Ui.dp(ctx, 10), 0, Ui.dp(ctx, 10));
+
+            TextView p = Ui.texte(ctx, String.valueOf(port), 18f, Ui.VERT, true);
+            ligne.addView(p, new LinearLayout.LayoutParams(Ui.dp(ctx, 70),
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            String nom = SERVICES.get(port);
+            String etiquette = nom == null ? "TCP" : nom;
+            List<String> noms = nomsReseaux;
+            if (noms.size() > 1) {
+                int masque = (int) l.get(i)[2];
+                StringBuilder qui = new StringBuilder();
+                for (int k = 0; k < noms.size(); k++) {
+                    if ((masque & (1 << k)) != 0) {
+                        if (qui.length() > 0) qui.append(", ");
+                        qui.append(noms.get(k));
+                    }
+                }
+                etiquette += "\n" + qui;
+            }
+            TextView s = Ui.texte(ctx, etiquette, 13f, Ui.DISCRET, false);
+            ligne.addView(s, new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView t = Ui.texte(ctx, String.format(Locale.getDefault(), "%.0f ms", ms),
+                    15f, couleurMs(ms), true);
+            ligne.addView(t);
+
+            if (i > 0) liste.addView(Ui.separateur(ctx));
+            liste.addView(ligne);
+        }
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        gen++;
+        super.onDetachedFromWindow();
+    }
+}

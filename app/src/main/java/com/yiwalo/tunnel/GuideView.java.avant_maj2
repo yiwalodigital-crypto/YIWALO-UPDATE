@@ -1,0 +1,110 @@
+package com.yiwalo.tunnel;
+
+import android.content.Context;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+final class GuideView extends LinearLayout {
+
+    GuideView(Context ctx, Runnable retour) {
+        super(ctx);
+        setOrientation(VERTICAL);
+        addView(Ui.entete(ctx, "Guide", retour));
+
+        section(ctx, R.drawable.ic_power, Ui.VERT, "Se connecter",
+                "1. Ouvre l’onglet Configurations et choisis ta configuration.\n"
+                + "2. Reviens à l’accueil et touche le bouton central.\n"
+                + "3. Quand l’état passe à « Connecté », l’IP réseau, la latence, la durée "
+                + "et les données s’affichent.\n\n"
+                + "Le bouton + de l’accueil sert à ajouter une configuration.", true);
+
+        section(ctx, R.drawable.ic_signal, Ui.VERT, "IP checker",
+                "Il change ton IP en coupant puis en rétablissant le réseau (mode avion), "
+                + "jusqu’à tomber sur une IP de ta liste.\n\n"
+                + "1. Touche le crayon et écris tes adresses, une par ligne.\n"
+                + "2. Règle la pause entre deux essais.\n"
+                + "3. Touche Lancer.\n\n"
+                + "Écrire 10.143 trouve toutes les IP 10.143.x.x. Une adresse complète est "
+                + "exacte, et * remplace un bloc (10.*.16).\n\n"
+                + "Quand une IP voulue est trouvée, la recherche s’arrête et tu reçois une "
+                + "notification avec un carillon. Si tu es déjà sur une bonne IP, l’alerte "
+                + "est immédiate.\n\n"
+                + "Au premier lancement, Android demande de choisir l’appli comme assistant "
+                + "numérique, ou d’activer son service d’accessibilité. C’est nécessaire pour "
+                + "couper le mode avion tout seul.", false);
+
+        section(ctx, R.drawable.ic_ping, Ui.ORANGE, "Ping des configurations",
+                "Dans l’onglet Configurations, touche Ping. Chaque configuration est testée "
+                + "avec le moteur, comme pour une vraie connexion, et le temps de réponse "
+                + "s’affiche en ms.\n\n"
+                + "Vert : moins de 150 ms. Orange : moins de 400 ms. Rouge : plus lent. "
+                + "Échec : le serveur ne répond pas. Touche une ligne pour voir la cause "
+                + "détaillée.\n\n"
+                + "Les résultats dépendent de ton IP et de ton réseau du moment : un échec "
+                + "peut venir d’une mauvaise IP. Pour Slow DNS, c’est le résolveur DNS qui "
+                + "est testé.\n\n"
+                + "Copier le rapport copie tous les résultats. Supprimer les échecs retire "
+                + "les configurations qui ne répondent pas.", false);
+
+        section(ctx, R.drawable.ic_ping, Ui.ORANGE, "Testeur de ports",
+                "Indique un hôte (exemple.com) ou une adresse IP, puis les ports à tester : "
+                + "80, 443 ou une plage comme 8000-8100. Des raccourcis proposent les ports "
+                + "courants, web ou tunnel.\n\n"
+                + "Un port ouvert répond tout de suite : il s’affiche avec son service et son "
+                + "temps de réponse en ms (vert : moins de 100 ms, orange : moins de 300 ms, "
+                + "rouge : plus lent).\n\n"
+                + "Fermé : le serveur refuse la connexion. Filtré : aucune réponse, souvent à "
+                + "cause d’un pare-feu. Le test dure quelques secondes et consomme très peu de "
+                + "données.", false);
+
+        section(ctx, R.drawable.ic_donnees, Ui.BLEU, "Consommation des données",
+                "Le débit en direct de l’application, avec une courbe sur la dernière "
+                + "minute.\n\n"
+                + "Cette session : volume échangé depuis l’ouverture de l’écran.\n"
+                + "Application : total de l’application depuis le dernier redémarrage du "
+                + "téléphone.\n"
+                + "Réseau mobile : total du téléphone depuis son dernier redémarrage.", false);
+
+        section(ctx, R.drawable.ic_cle, Ui.ROSE, "ID de l’appareil",
+                "Chaque appareil a un ID unique. Certaines configurations peuvent être "
+                + "réservées à des appareils précis : donne cet ID à la personne qui te "
+                + "fournit la configuration.\n\n"
+                + "Touche la ligne pour le copier.", false);
+
+        section(ctx, R.drawable.ic_partager, Ui.VERT, "Partager l’application",
+                "Envoie l’application elle-même (fichier APK) par Bluetooth, Xender, "
+                + "WhatsApp ou Quick Share.\n\n"
+                + "Le destinataire ouvre le fichier pour l’installer, après avoir autorisé "
+                + "les sources inconnues.", false);
+
+        section(ctx, R.drawable.ic_info, Ui.DISCRET, "Si la connexion échoue",
+                "1. Lance l’IP checker pour obtenir une bonne IP.\n"
+                + "2. Teste tes configurations avec Ping et choisis une configuration verte. Vérifie ensuite ton serveur avec le Host checker.\n"
+                + "3. Désactive l’optimisation de la batterie pour l’appli dans les réglages "
+                + "Android, afin que la connexion ne soit pas coupée en arrière-plan.\n"
+                + "4. Vérifie ton forfait et ta couverture réseau.", false);
+    }
+
+    private void section(Context c, int icone, int teinte, String titre, String corps,
+                         boolean ouvert) {
+        LinearLayout carte = Ui.carte(c);
+        final TextView body = Ui.texte(c, corps, 14f, 0xFFCBD5E1, false);
+        body.setLineSpacing(0, 1.2f);
+        body.setPadding(Ui.dp(c, 16), Ui.dp(c, 4), Ui.dp(c, 16), Ui.dp(c, 16));
+        body.setVisibility(ouvert ? VISIBLE : GONE);
+        final View[] fin = new View[1];
+        final boolean[] etat = {ouvert};
+        View tete = Ui.rangee(c, icone, teinte, titre, "", () -> {
+            etat[0] = !etat[0];
+            body.setVisibility(etat[0] ? VISIBLE : GONE);
+            fin[0].setRotation(etat[0] ? 90 : 0);
+        });
+        fin[0] = ((ViewGroup) tete).getChildAt(2);
+        fin[0].setRotation(ouvert ? 90 : 0);
+        carte.addView(tete);
+        carte.addView(body);
+        addView(carte);
+    }
+}

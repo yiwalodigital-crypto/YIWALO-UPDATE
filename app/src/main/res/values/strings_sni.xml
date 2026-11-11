@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cfg_modifier">Modifier</string>
+    <string name="cfg_enregistrer">Enregistrer</string>
+    <string name="cfg_sni_titre">Nom TLS (SNI)</string>
+    <string name="cfg_sni_aide">Nom du serveur attendu par son certificat. Laissez vide pour utiliser celui du lien. La vérification du certificat reste active.</string>
+    <string name="cfg_sni_indice">ex. bkcbebe.store</string>
+</resources>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="fond">#0B1020</color>
+    <color name="carte">#151B2E</color>
+    <color name="bleu">#3D7BFF</color>
+    <color name="bleu_clair">#7FB2FF</color>
+    <color name="violet">#8B5CF6</color>
+    <color name="vert">#22C55E</color>
+    <color name="texte">#E8ECF8</color>
+    <color name="texte_discret">#8A93AD</color>
+</resources>

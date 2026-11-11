@@ -1,0 +1,230 @@
+package com.yiwalo.tunnel;
+
+import android.Manifest;
+import android.app.Activity;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.drawable.GradientDrawable;
+import android.net.VpnService;
+import android.os.Build;
+import android.os.Bundle;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.yiwalo.tunnel.config.ConfigStore;
+import com.yiwalo.tunnel.vpn.YiwaloVpnService;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class MainActivity extends Activity implements AccueilView.Actions {
+
+    private static final String CLE_ONGLET = "onglet";
+    private static final int DEMANDE_VPN = 100;
+    private static final int DEMANDE_NOTIFICATIONS = 101;
+
+    private static final int[] ICONES = {
+            R.drawable.ic_accueil,
+            R.drawable.ic_configurations,
+            R.drawable.ic_abonnements,
+            R.drawable.ic_journaux,
+            R.drawable.ic_plus
+    };
+
+    private static final int[] TITRES = {
+            R.string.onglet_accueil,
+            R.string.onglet_configurations,
+            R.string.onglet_abonnements,
+            R.string.onglet_journaux,
+            R.string.onglet_plus
+    };
+
+    private final List<ImageView> onglets = new ArrayList<>();
+    private FrameLayout contenu;
+    private ImageView plus;
+    private int selection = -1;
+    private ConfigStore store;
+    private boolean notificationsDemandees = false;
+
+    @Override
+    @SuppressWarnings("deprecation")
+    protected void onCreate(Bundle etat) {
+        super.onCreate(etat);
+        setContentView(R.layout.activity_main);
+        store = new ConfigStore(this);
+
+        View racine = findViewById(R.id.racine);
+        racine.setOnApplyWindowInsetsListener((vue, insets) -> {
+            vue.setPadding(
+                    insets.getSystemWindowInsetLeft(),
+                    insets.getSystemWindowInsetTop(),
+                    insets.getSystemWindowInsetRight(),
+                    insets.getSystemWindowInsetBottom());
+            return insets;
+        });
+
+        plus = findViewById(R.id.plus);
+        GradientDrawable fondPlus = new GradientDrawable();
+        fondPlus.setShape(GradientDrawable.OVAL);
+        fondPlus.setColor(getColor(R.color.bleu));
+        plus.setBackground(fondPlus);
+        plus.setOnClickListener(v -> importerDepuisPressePapiers());
+
+        contenu = findViewById(R.id.contenu);
+        LinearLayout barre = findViewById(R.id.barre);
+        for (int i = 0; i < TITRES.length; i++) {
+            ImageView onglet = creerOnglet(i);
+            onglets.add(onglet);
+            barre.addView(onglet);
+        }
+
+        int depart = etat == null ? 0 : etat.getInt(CLE_ONGLET, 0);
+        afficher(depart);
+    }
+
+    public void allerAccueil() {
+        actualiserAccueil();
+    }
+
+    public void actualiserAccueil() {
+        selection = -1;
+        afficher(0);
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle etat) {
+        super.onSaveInstanceState(etat);
+        etat.putInt(CLE_ONGLET, selection);
+    }
+
+    private void importerDepuisPressePapiers() {
+        EtatVpn e = SuiviVpn.etat();
+        if (e != EtatVpn.DECONNECTE && e != EtatVpn.ERREUR) {
+            Toast.makeText(this, R.string.acc_deconnecter_d_abord, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Importation.depuisPressePapiers(this, store, this::actualiserAccueil);
+    }
+
+    @Override
+    public void connecter() {
+        if (store.active() == null) {
+            Toast.makeText(this, R.string.msg_aucune_config, Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+                && !notificationsDemandees) {
+            notificationsDemandees = true;
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    DEMANDE_NOTIFICATIONS);
+            return;
+        }
+        demanderVpn();
+    }
+
+    @Override
+    public void deconnecter() {
+        try {
+            startService(new Intent(this, YiwaloVpnService.class)
+                    .setAction(YiwaloVpnService.ACTION_DECONNECTER));
+        } catch (RuntimeException e) {
+            Journal.erreur("Impossible de demander la déconnexion : " + e);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] permissions, int[] resultats) {
+        super.onRequestPermissionsResult(code, permissions, resultats);
+        if (code == DEMANDE_NOTIFICATIONS) {
+            demanderVpn();
+        }
+    }
+
+    private void demanderVpn() {
+        Intent preparation = VpnService.prepare(this);
+        if (preparation != null) {
+            Journal.info("Demande d'autorisation VPN à Android.");
+            startActivityForResult(preparation, DEMANDE_VPN);
+        } else {
+            demarrerService();
+        }
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    protected void onActivityResult(int code, int resultat, Intent donnees) {
+        super.onActivityResult(code, resultat, donnees);
+        if (code == DEMANDE_VPN) {
+            if (resultat == RESULT_OK) {
+                demarrerService();
+            } else {
+                Journal.avertissement("Autorisation VPN refusée par l'utilisateur.");
+                SuiviVpn.changer(EtatVpn.ERREUR, getString(R.string.vpn_autorisation_refusee));
+            }
+        }
+    }
+
+    private void demarrerService() {
+        try {
+            startForegroundService(new Intent(this, YiwaloVpnService.class)
+                    .setAction(YiwaloVpnService.ACTION_CONNECTER));
+        } catch (RuntimeException e) {
+            Journal.erreur("Impossible de démarrer le service VPN : " + e);
+            SuiviVpn.changer(EtatVpn.ERREUR, "Impossible de démarrer le service VPN.");
+        }
+    }
+
+    private ImageView creerOnglet(int index) {
+        ImageView icone = new ImageView(this);
+        icone.setImageResource(ICONES[index]);
+        icone.setPadding(dp(14), dp(14), dp(14), dp(14));
+        icone.setContentDescription(getString(TITRES[index]));
+        icone.setLayoutParams(new LinearLayout.LayoutParams(0, dp(56), 1f));
+        icone.setOnClickListener(v -> afficher(index));
+        return icone;
+    }
+
+    private void afficher(int index) {
+        if (index == selection) {
+            return;
+        }
+        selection = index;
+
+        for (int i = 0; i < onglets.size(); i++) {
+            onglets.get(i).setColorFilter(
+                    getColor(i == index ? R.color.bleu_clair : R.color.texte_discret));
+        }
+        plus.setVisibility(index == 0 ? View.VISIBLE : View.INVISIBLE);
+
+        View affiche;
+        if (index == 0) {
+            affiche = new AccueilView(this, store.active(), this);
+        } else if (index == 1) {
+            affiche = new ConfigurationsView(this, store);
+        } else if (index == 3) {
+            affiche = new JournauxView(this);
+        } else {
+            TextView ecran = new TextView(this);
+            ecran.setText(getString(TITRES[index]) + "\n\n" + getString(R.string.section_en_cours));
+            ecran.setTextColor(getColor(R.color.texte));
+            ecran.setTextSize(18f);
+            ecran.setGravity(Gravity.CENTER);
+            affiche = ecran;
+        }
+        contenu.removeAllViews();
+        contenu.addView(affiche, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private int dp(int valeur) {
+        return Math.round(valeur * getResources().getDisplayMetrics().density);
+    }
+}

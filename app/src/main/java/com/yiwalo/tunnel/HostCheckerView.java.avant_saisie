@@ -1,0 +1,220 @@
+package com.yiwalo.tunnel;
+
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import com.yiwalo.tunnel.config.ConfigStore;
+import com.yiwalo.tunnel.config.Configuration;
+
+import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+final class HostCheckerView extends LinearLayout {
+    private static final String[] DEFAUT = {
+            "google.com", "facebook.com", "cloudflare.com", "whatsapp.com"
+    };
+
+    private final Context ctx;
+    private final Handler h = new Handler(Looper.getMainLooper());
+    private final ExecutorService pool = Executors.newFixedThreadPool(4);
+    private volatile boolean attache = true;
+    private volatile int generation = 0;
+    private final List<Ligne> lignes = new ArrayList<>();
+    private final TextView vResume;
+
+    private static final class Ligne {
+        final String hote;
+        TextView detail, pastille;
+        Ligne(String hote) { this.hote = hote; }
+    }
+
+    private static final class Resultat {
+        String statut, detail;
+        int couleur;
+    }
+
+    HostCheckerView(final Context ctx, Runnable retour) {
+        super(ctx);
+        this.ctx = ctx;
+        setOrientation(VERTICAL);
+        addView(Ui.entete(ctx, "Host checker", retour));
+        TextView intro = Ui.texte(ctx,
+                "Teste DNS, TCP et HTTPS pour savoir si chaque hôte fonctionne réellement. "
+                        + "Touche un hôte pour le tester seul.", 13f, Ui.DISCRET, false);
+        intro.setPadding(Ui.dp(ctx, 4), 0, Ui.dp(ctx, 4), Ui.dp(ctx, 12));
+        addView(intro);
+
+        LinearLayout liste = Ui.carte(ctx);
+        List<String> tous = new ArrayList<>();
+        for (String s : DEFAUT) tous.add(s);
+        String profil = hoteProfil();
+        if (profil != null && !tous.contains(profil)) tous.add(profil);
+        for (int i = 0; i < tous.size(); i++) {
+            Ligne l = new Ligne(tous.get(i));
+            liste.addView(creerLigne(l, tous.get(i).equals(profil)));
+            if (i < tous.size() - 1) liste.addView(Ui.separateur(ctx));
+            lignes.add(l);
+        }
+        addView(liste);
+
+        vResume = Ui.texte(ctx, "", 14f, Ui.DISCRET, false);
+        vResume.setGravity(Gravity.CENTER);
+        addView(vResume);
+        addView(Ui.bouton(ctx, "Tester tous les hôtes", Ui.VERT, this::testerTout));
+    }
+
+    private String hoteProfil() {
+        try {
+            Configuration c = new ConfigStore(ctx).active();
+            if (c != null && c.serveur != null && !c.serveur.trim().isEmpty()) {
+                return c.serveur.trim() + (c.port > 0 ? ":" + c.port : "");
+            }
+        } catch (RuntimeException ignore) {
+            // pas de profil actif
+        }
+        return null;
+    }
+
+    private LinearLayout creerLigne(final Ligne l, boolean profil) {
+        LinearLayout r = new LinearLayout(ctx);
+        r.setOrientation(HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 12));
+        LinearLayout t = new LinearLayout(ctx);
+        t.setOrientation(VERTICAL);
+        t.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        t.addView(Ui.texte(ctx, profil ? l.hote + "  ·  profil actif" : l.hote,
+                15f, Ui.TEXTE, true));
+        l.detail = Ui.texte(ctx, "Non testé", 12f, Ui.DISCRET, false);
+        t.addView(l.detail);
+        r.addView(t);
+        l.pastille = Ui.texte(ctx, "—", 12f, Ui.DISCRET, true);
+        l.pastille.setPadding(Ui.dp(ctx, 10), Ui.dp(ctx, 5), Ui.dp(ctx, 10), Ui.dp(ctx, 5));
+        l.pastille.setBackground(Ui.fond(ctx, 0xFF243049, 20, 0));
+        r.addView(l.pastille);
+        r.setOnClickListener(v -> lancer(l, generation, null));
+        return r;
+    }
+
+    private void testerTout() {
+        final int gen = ++generation;
+        vResume.setText("Test en cours…");
+        final int[] fait = {0};
+        final int total = lignes.size();
+        for (Ligne l : lignes) {
+            lancer(l, gen, () -> {
+                fait[0]++;
+                if (fait[0] == total) {
+                    int ok = 0;
+                    for (Ligne x : lignes) if (x.pastille.getText().toString().equals("OK")) ok++;
+                    vResume.setText(ok + " / " + total + " hôtes joignables");
+                }
+            });
+        }
+    }
+
+    private void lancer(final Ligne l, final int gen, final Runnable apres) {
+        l.pastille.setText("…");
+        l.pastille.setTextColor(Ui.DISCRET);
+        l.detail.setText("Test en cours…");
+        pool.execute(() -> {
+            final Resultat r = tester(l.hote);
+            h.post(() -> {
+                if (!attache || gen != generation) return;
+                l.pastille.setText(r.statut);
+                l.pastille.setTextColor(r.couleur);
+                l.detail.setText(r.detail);
+                if (apres != null) apres.run();
+            });
+        });
+    }
+
+    private Resultat tester(String saisie) {
+        Resultat res = new Resultat();
+        String hote = saisie;
+        int port = 443;
+        boolean tcpSeul = false;
+        int i = saisie.lastIndexOf(':');
+        if (i > 0 && saisie.indexOf(':') == i) {
+            try {
+                port = Integer.parseInt(saisie.substring(i + 1));
+                hote = saisie.substring(0, i);
+                tcpSeul = true;
+            } catch (NumberFormatException ignore) {
+                // pas de port
+            }
+        }
+        long t0 = System.nanoTime();
+        InetAddress adr;
+        try {
+            adr = InetAddress.getByName(hote);
+        } catch (Exception e) {
+            res.statut = "DNS";
+            res.couleur = Ui.ROUGE;
+            res.detail = "Résolution DNS impossible";
+            return res;
+        }
+        long dns = (System.nanoTime() - t0) / 1000000L;
+        long t1 = System.nanoTime();
+        Socket s = new Socket();
+        try {
+            s.connect(new InetSocketAddress(adr, port), 5000);
+        } catch (Exception e) {
+            res.statut = "Bloqué";
+            res.couleur = Ui.ROUGE;
+            res.detail = "DNS " + dns + " ms · TCP :" + port + " refusé ou expiré";
+            return res;
+        } finally {
+            try { s.close(); } catch (Exception ignore) { }
+        }
+        long tcp = (System.nanoTime() - t1) / 1000000L;
+        String base = "DNS " + dns + " ms · TCP " + tcp + " ms";
+        if (tcpSeul) {
+            res.statut = "OK";
+            res.couleur = Ui.VERT;
+            res.detail = adr.getHostAddress() + " · " + base;
+            return res;
+        }
+        long t2 = System.nanoTime();
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL("https://" + hote + "/").openConnection();
+            c.setConnectTimeout(6000);
+            c.setReadTimeout(6000);
+            c.setInstanceFollowRedirects(false);
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) HostChecker");
+            int code = c.getResponseCode();
+            long http = (System.nanoTime() - t2) / 1000000L;
+            res.statut = "OK";
+            res.couleur = http > 2000 ? Ui.ORANGE : Ui.VERT;
+            res.detail = adr.getHostAddress() + " · " + base + " · HTTP " + code
+                    + " " + http + " ms";
+        } catch (Exception e) {
+            res.statut = "Partiel";
+            res.couleur = Ui.ORANGE;
+            res.detail = base + " · TCP ok, HTTPS sans réponse";
+        } finally {
+            if (c != null) c.disconnect();
+        }
+        return res;
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        attache = false;
+        pool.shutdownNow();
+        super.onDetachedFromWindow();
+    }
+}

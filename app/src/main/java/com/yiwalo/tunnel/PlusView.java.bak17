@@ -1,0 +1,85 @@
+package com.yiwalo.tunnel;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.Switch;
+import android.widget.TextView;
+
+public class PlusView extends ScrollView {
+
+    public PlusView(Context ctx) {
+        super(ctx);
+        LinearLayout racine = new LinearLayout(ctx);
+        racine.setOrientation(LinearLayout.VERTICAL);
+        racine.setPadding(dp(20), dp(24), dp(20), dp(24));
+        addView(racine, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        racine.addView(titre(ctx, "Réglages"));
+        final SharedPreferences prefs = ctx.getSharedPreferences("yiwalo_reglages", Context.MODE_PRIVATE);
+        Switch reco = new Switch(ctx);
+        reco.setText("Reconnexion automatique");
+        reco.setTextColor(ctx.getColor(R.color.texte));
+        reco.setTextSize(16f);
+        reco.setChecked(prefs.getBoolean("reconnexion_auto", true));
+        reco.setOnCheckedChangeListener((b, actif) ->
+                prefs.edit().putBoolean("reconnexion_auto", actif).apply());
+        racine.addView(reco);
+        racine.addView(discret(ctx, "Relance la connexion (3 essais) si le tunnel tombe. "
+                + "Un clic sur déconnecter l’annule."));
+
+        racine.addView(titre(ctx, "À propos"));
+        String version = "?";
+        try {
+            PackageInfo pi = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
+            version = pi.versionName;
+        } catch (Exception ignore) {
+            // version inconnue
+        }
+        racine.addView(ligne(ctx, "Application : YIWALO TUNNEL"));
+        racine.addView(ligne(ctx, "Version : " + version));
+        racine.addView(ligne(ctx, "Paquet : " + ctx.getPackageName()));
+        racine.addView(ligne(ctx, "Moteurs : Xray (VMess, VLESS, Trojan), DNSTT + SSH (Slow DNS), tun2socks"));
+
+        racine.addView(titre(ctx, "Aide rapide"));
+        racine.addView(ligne(ctx, "• Coller un lien : bouton + puis coller vmess://, vless://, trojan:// ou ss://."));
+        racine.addView(ligne(ctx, "• Code YL : créé depuis Partager, il commence par YL."));
+        racine.addView(ligne(ctx, "• Verrouillage : une config verrouillée ne peut être ni modifiée, ni copiée, ni partagée."));
+        racine.addView(ligne(ctx, "• En cas d’échec : ouvrez Journaux pour voir la cause."));
+    }
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    private TextView titre(Context ctx, String t) {
+        TextView v = new TextView(ctx);
+        v.setText(t);
+        v.setTextSize(20f);
+        v.setTypeface(v.getTypeface(), android.graphics.Typeface.BOLD);
+        v.setTextColor(ctx.getColor(R.color.bleu_clair));
+        v.setPadding(0, dp(22), 0, dp(8));
+        return v;
+    }
+
+    private TextView ligne(Context ctx, String t) {
+        TextView v = new TextView(ctx);
+        v.setText(t);
+        v.setTextSize(15f);
+        v.setTextColor(ctx.getColor(R.color.texte));
+        v.setPadding(0, dp(4), 0, dp(4));
+        return v;
+    }
+
+    private TextView discret(Context ctx, String t) {
+        TextView v = ligne(ctx, t);
+        v.setTextSize(13f);
+        v.setTextColor(ctx.getColor(R.color.texte_discret));
+        return v;
+    }
+}

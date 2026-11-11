@@ -1,0 +1,307 @@
+package com.yiwalo.tunnel;
+
+import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.PopupMenu;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.yiwalo.tunnel.config.ConfigStore;
+import com.yiwalo.tunnel.config.Configuration;
+import com.yiwalo.tunnel.config.ImportateurLiens;
+
+import java.util.List;
+
+public class ConfigurationsView extends LinearLayout {
+
+    private final ConfigStore store;
+    private final LinearLayout liste;
+
+    public ConfigurationsView(Context contexte, ConfigStore store) {
+        super(contexte);
+        this.store = store;
+        setOrientation(VERTICAL);
+
+        LinearLayout entete = new LinearLayout(contexte);
+        entete.setGravity(Gravity.CENTER_VERTICAL);
+        entete.setPadding(dp(16), dp(8), dp(16), dp(8));
+
+        TextView titre = new TextView(contexte);
+        titre.setText(R.string.onglet_configurations);
+        titre.setTextSize(20f);
+        titre.setTextColor(contexte.getColor(R.color.texte));
+        titre.setTypeface(titre.getTypeface(), Typeface.BOLD);
+        entete.addView(titre, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        ImageView plus = new ImageView(contexte);
+        plus.setImageResource(R.drawable.ic_ajouter);
+        plus.setPadding(dp(10), dp(10), dp(10), dp(10));
+        plus.setContentDescription(contexte.getString(R.string.cfg_ajouter_desc));
+        GradientDrawable fondPlus = new GradientDrawable();
+        fondPlus.setShape(GradientDrawable.OVAL);
+        fondPlus.setColor(contexte.getColor(R.color.bleu));
+        plus.setBackground(fondPlus);
+        plus.setOnClickListener(this::ouvrirMenu);
+        entete.addView(plus, new LinearLayout.LayoutParams(dp(44), dp(44)));
+
+        addView(entete, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        ScrollView defilement = new ScrollView(contexte);
+        liste = new LinearLayout(contexte);
+        liste.setOrientation(VERTICAL);
+        liste.setPadding(dp(16), dp(8), dp(16), dp(16));
+        defilement.addView(liste, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        addView(defilement, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        rafraichir();
+    }
+
+    private void ouvrirMenu(View ancre) {
+        PopupMenu menu = new PopupMenu(getContext(), ancre);
+        menu.getMenu().add(0, 1, 0, R.string.cfg_menu_presse_papiers);
+        menu.getMenu().add(0, 2, 1, R.string.cfg_menu_coller);
+        menu.setOnMenuItemClickListener(item -> {
+            if (item.getItemId() == 1) {
+                importerPressePapiers();
+            } else {
+                afficherSaisie();
+            }
+            return true;
+        });
+        menu.show();
+    }
+
+    private void importerPressePapiers() {
+        Context contexte = getContext();
+        ClipboardManager cm = (ClipboardManager) contexte.getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipData clip = cm == null ? null : cm.getPrimaryClip();
+        CharSequence texte = (clip != null && clip.getItemCount() > 0)
+                ? clip.getItemAt(0).coerceToText(contexte) : null;
+        if (texte == null || texte.toString().trim().isEmpty()) {
+            Toast.makeText(contexte, R.string.cfg_presse_vide, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        traiter(texte.toString());
+    }
+
+    private void afficherSaisie() {
+        Context contexte = getContext();
+        EditText saisie = new EditText(contexte);
+        saisie.setHint(R.string.cfg_coller_indice);
+        saisie.setMinLines(5);
+        saisie.setGravity(Gravity.TOP | Gravity.START);
+        saisie.setPadding(dp(16), dp(12), dp(16), dp(12));
+        new AlertDialog.Builder(contexte)
+                .setTitle(R.string.cfg_coller_titre)
+                .setView(saisie)
+                .setPositiveButton(R.string.cfg_importer,
+                        (d, w) -> traiter(saisie.getText().toString()))
+                .setNegativeButton(R.string.cfg_annuler, null)
+                .show();
+    }
+
+    private void traiter(String texte) {
+        Context contexte = getContext();
+        ImportateurLiens.Resultat r = ImportateurLiens.importer(texte);
+        int ajoutees = 0;
+        int doublons = 0;
+        for (Configuration c : r.configurations) {
+            if (store.ajouter(c)) {
+                ajoutees++;
+                store.selectionner(c.id);
+            } else {
+                doublons++;
+            }
+        }
+        rafraichir();
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(contexte.getString(R.string.cfg_ajoutees, ajoutees));
+        if (ajoutees > 0) {
+            sb.append("\n").append(contexte.getString(R.string.cfg_selectionnee));
+        }
+        if (doublons > 0) {
+            sb.append("\n").append(contexte.getString(R.string.cfg_doublons, doublons));
+        }
+        if (!r.erreurs.isEmpty()) {
+            sb.append("\n\n").append(contexte.getString(R.string.cfg_erreurs));
+            for (String e : r.erreurs) {
+                sb.append("\n• ").append(e);
+            }
+        }
+        AlertDialog.Builder resultatDialogue = new AlertDialog.Builder(contexte)
+                .setTitle(R.string.cfg_resultat_titre)
+                .setMessage(sb.toString())
+                .setNegativeButton(R.string.cfg_ok, null);
+        if (ajoutees > 0 && contexte instanceof MainActivity) {
+            resultatDialogue.setPositiveButton(R.string.cfg_aller_accueil,
+                    (d, w) -> ((MainActivity) contexte).allerAccueil());
+        }
+        resultatDialogue.show();
+    }
+
+    private void rafraichir() {
+        Context contexte = getContext();
+        liste.removeAllViews();
+        List<Configuration> configurations = store.lister();
+        Configuration active = store.active();
+
+        if (configurations.isEmpty()) {
+            TextView vide = new TextView(contexte);
+            vide.setText(R.string.cfg_vide);
+            vide.setTextSize(15f);
+            vide.setGravity(Gravity.CENTER);
+            vide.setTextColor(contexte.getColor(R.color.texte_discret));
+            vide.setPadding(dp(16), dp(48), dp(16), dp(16));
+            liste.addView(vide);
+            return;
+        }
+        for (Configuration c : configurations) {
+            boolean estActive = active != null && active.id.equals(c.id);
+            liste.addView(creerCarte(c, estActive));
+        }
+    }
+
+    private ImageView icone(int ressource, View.OnClickListener action) {
+        ImageView v = new ImageView(getContext());
+        v.setImageResource(ressource);
+        v.setColorFilter(getContext().getColor(R.color.texte));
+        v.setPadding(dp(7), dp(7), dp(7), dp(7));
+        v.setOnClickListener(action);
+        v.setLayoutParams(new LinearLayout.LayoutParams(dp(34), dp(34)));
+        return v;
+    }
+
+    private View creerCarte(Configuration c, boolean estActive) {
+        Context contexte = getContext();
+        final String resume = c.type.libelle + " " + c.serveur + ":" + c.port;
+
+        LinearLayout carte = new LinearLayout(contexte);
+        carte.setOrientation(HORIZONTAL);
+        carte.setGravity(Gravity.CENTER_VERTICAL);
+        carte.setPadding(dp(16), dp(12), dp(10), dp(12));
+        GradientDrawable fond = new GradientDrawable();
+        fond.setColor(contexte.getColor(estActive ? R.color.bleu : R.color.carte));
+        fond.setCornerRadius(dp(16));
+        carte.setBackground(fond);
+        LinearLayout.LayoutParams marges = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        marges.bottomMargin = dp(10);
+        carte.setLayoutParams(marges);
+
+        LinearLayout textes = new LinearLayout(contexte);
+        textes.setOrientation(VERTICAL);
+
+        TextView nom = new TextView(contexte);
+        nom.setText(c.nom);
+        nom.setTextSize(16f);
+        nom.setSingleLine(true);
+        nom.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        nom.setTextColor(contexte.getColor(R.color.texte));
+        nom.setTypeface(nom.getTypeface(), Typeface.BOLD);
+        textes.addView(nom);
+
+        TextView details = new TextView(contexte);
+        details.setText(c.serveur);
+        details.setTextSize(13f);
+        details.setSingleLine(true);
+        details.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        details.setTextColor(contexte.getColor(estActive ? R.color.texte : R.color.texte_discret));
+        textes.addView(details);
+        carte.addView(textes, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        LinearLayout droite = new LinearLayout(contexte);
+        droite.setOrientation(VERTICAL);
+        droite.setGravity(Gravity.END);
+
+        LinearLayout icones = new LinearLayout(contexte);
+        icones.setOrientation(HORIZONTAL);
+        icones.addView(icone(R.drawable.ic_copier, v -> {
+            ClipboardManager cm = (ClipboardManager) contexte.getSystemService(Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("config", resume));
+            Toast.makeText(contexte, "Copié", Toast.LENGTH_SHORT).show();
+        }));
+        icones.addView(icone(R.drawable.ic_partager, v -> {
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_SEND);
+            i.setType("text/plain");
+            i.putExtra(android.content.Intent.EXTRA_TEXT, resume);
+            contexte.startActivity(android.content.Intent.createChooser(i, c.nom));
+        }));
+        icones.addView(icone(R.drawable.ic_modifier, v ->
+                EditeurConfig.ouvrir(contexte, store, c, this::rafraichir)));
+        icones.addView(icone(R.drawable.ic_supprimer, v -> confirmerSuppression(c)));
+        droite.addView(icones);
+
+        LinearLayout bas = new LinearLayout(contexte);
+        bas.setGravity(Gravity.END);
+        TextView ping = new TextView(contexte);
+        ping.setText("-1 ms");
+        ping.setTextSize(13f);
+        ping.setTextColor(contexte.getColor(R.color.texte_discret));
+        ping.setPadding(0, 0, dp(10), 0);
+        bas.addView(ping);
+        TextView type = new TextView(contexte);
+        type.setText("v2ray");
+        type.setTextSize(13f);
+        type.setTextColor(contexte.getColor(R.color.texte));
+        bas.addView(type);
+        droite.addView(bas);
+        carte.addView(droite);
+
+        carte.setOnClickListener(v -> {
+            store.selectionner(c.id);
+            rafraichir();
+        });
+        return carte;
+    }
+
+    private void modifierSni(Configuration c) {
+        Context contexte = getContext();
+        EditText saisie = new EditText(contexte);
+        saisie.setText(c.sniManuel);
+        saisie.setHint(R.string.cfg_sni_indice);
+        saisie.setSingleLine(true);
+        saisie.setPadding(dp(16), dp(12), dp(16), dp(12));
+        new AlertDialog.Builder(contexte)
+                .setTitle(R.string.cfg_sni_titre)
+                .setMessage(R.string.cfg_sni_aide)
+                .setView(saisie)
+                .setPositiveButton(R.string.cfg_enregistrer, (d, w) -> {
+                    store.modifierSni(c.id, saisie.getText().toString().trim());
+                    rafraichir();
+                })
+                .setNegativeButton(R.string.cfg_annuler, null)
+                .show();
+    }
+
+    private void confirmerSuppression(Configuration c) {
+        Context contexte = getContext();
+        new AlertDialog.Builder(contexte)
+                .setMessage(contexte.getString(R.string.cfg_confirmer_supprimer, c.nom))
+                .setPositiveButton(R.string.cfg_supprimer, (d, w) -> {
+                    store.supprimer(c.id);
+                    rafraichir();
+                })
+                .setNegativeButton(R.string.cfg_annuler, null)
+                .show();
+    }
+
+    private int dp(int valeur) {
+        return Math.round(valeur * getResources().getDisplayMetrics().density);
+    }
+}

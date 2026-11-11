@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cfg_aller_accueil">Aller à l’Accueil</string>
+    <string name="cfg_selectionnee">Elle est sélectionnée : allez à l’Accueil et touchez le grand bouton pour vous connecter.</string>
+</resources>

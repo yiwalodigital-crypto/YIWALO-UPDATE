@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ed_titre">Modifier la configuration</string>
+    <string name="ed_intro">Si votre configuration vient d’un lien, vous n’avez normalement rien à changer. Modifiez seulement ce que votre fournisseur vous demande.</string>
+    <string name="ed_nom">NOM</string>
+    <string name="ed_nom_aide">Le nom affiché dans votre liste.</string>
+    <string name="ed_hote">ADRESSE DU SERVEUR</string>
+    <string name="ed_hote_aide">Nom de domaine ou adresse IP du serveur.</string>
+    <string name="ed_port">PORT</string>
+    <string name="ed_port_aide">Numéro indiqué par votre fournisseur (ex. 443).</string>
+    <string name="ed_id">UUID / MOT DE PASSE</string>
+    <string name="ed_id_aide">Identifiant secret fourni avec votre configuration.</string>
+    <string name="ed_reseau">TYPE DE RÉSEAU</string>
+    <string name="ed_reseau_aide">Touchez pour choisir. Gardez la valeur de votre lien.</string>
+    <string name="ed_reseau_titre">Type de réseau</string>
+    <string name="ed_securite">SÉCURITÉ</string>
+    <string name="ed_securite_aide">none : aucune. tls : TLS classique. reality : Reality.</string>
+    <string name="ed_securite_titre">Sécurité</string>
+    <string name="ed_sni">SNI (nom TLS)</string>
+    <string name="ed_sni_aide">Nom utilisé pour la connexion sécurisée. Laissez vide si votre lien n’en contient pas.</string>
+    <string name="ed_host">HOST (en-tête)</string>
+    <string name="ed_host_aide">Nom envoyé au serveur dans la requête. Utilisé par ws, grpc, httpupgrade et xhttp.</string>
+    <string name="ed_chemin">CHEMIN</string>
+    <string name="ed_service">NOM DU SERVICE (grpc)</string>
+    <string name="ed_chemin_aide">ws, httpupgrade, xhttp : chemin (ex. /ws). grpc : nom du service.</string>
+    <string name="ed_alpn">ALPN</string>
+    <string name="ed_alpn_aide">Ex. h2,http/1.1. Laissez vide si inconnu.</string>
+    <string name="ed_fp">EMPREINTE TLS (fp)</string>
+    <string name="ed_fp_aide">Ex. chrome. Laissez vide si inconnu.</string>
+    <string name="ed_pbk">CLÉ PUBLIQUE REALITY (pbk)</string>
+    <string name="ed_pbk_aide">Obligatoire avec Reality. Copiez-la exactement depuis votre lien.</string>
+    <string name="ed_sid">SHORT ID REALITY (sid)</string>
+    <string name="ed_sid_aide">Fourni par votre fournisseur. Peut rester vide s’il n’en a pas donné.</string>
+    <string name="ed_spx">SPIDERX REALITY (spx)</string>
+    <string name="ed_spx_aide">Ex. /. Laissez vide si inconnu.</string>
+    <string name="ed_flow">FLOW</string>
+    <string name="ed_flow_aide">Ex. xtls-rprx-vision. Laissez vide si inconnu.</string>
+    <string name="ed_enregistrer">Enregistrer</string>
+    <string name="ed_enregistre">Configuration enregistrée.</string>
+</resources>

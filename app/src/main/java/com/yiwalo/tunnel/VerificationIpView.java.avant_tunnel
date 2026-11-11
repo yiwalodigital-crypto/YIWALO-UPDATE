@@ -1,0 +1,213 @@
+package com.yiwalo.tunnel;
+
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
+final class VerificationIpView extends LinearLayout {
+    private final Context ctx;
+    private final Handler h = new Handler(Looper.getMainLooper());
+    private volatile boolean attache = true;
+    private final TextView vSous, vIp;
+    private TextView vFai, vPays, vRegion, vVille, dernier;
+    private String ip = "";
+
+    VerificationIpView(final Context ctx, Runnable retour) {
+        super(ctx);
+        this.ctx = ctx;
+        setOrientation(VERTICAL);
+        addView(Ui.entete(ctx, "Vérification IP", retour));
+        int p = Ui.dp(ctx, 20);
+
+        LinearLayout carte = new LinearLayout(ctx);
+        carte.setOrientation(VERTICAL);
+        carte.setPadding(p, p, p, p);
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{0xFF1E3A8A, 0xFF2563EB});
+        g.setCornerRadius(Ui.dp(ctx, 28));
+        carte.setBackground(g);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cp.bottomMargin = Ui.dp(ctx, 14);
+        carte.setLayoutParams(cp);
+
+        LinearLayout haut = new LinearLayout(ctx);
+        haut.setOrientation(HORIZONTAL);
+        haut.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView ic = new ImageView(ctx);
+        ic.setImageResource(R.drawable.ic_globe);
+        ic.setColorFilter(Ui.TEXTE);
+        ic.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 14), Ui.dp(ctx, 14), Ui.dp(ctx, 14));
+        GradientDrawable cercle = new GradientDrawable();
+        cercle.setShape(GradientDrawable.OVAL);
+        cercle.setColor(0x33FFFFFF);
+        cercle.setStroke(Ui.dp(ctx, 1), 0x55FFFFFF);
+        ic.setBackground(cercle);
+        ic.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(ctx, 56), Ui.dp(ctx, 56)));
+        haut.addView(ic);
+        LinearLayout t = new LinearLayout(ctx);
+        t.setOrientation(VERTICAL);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tp.leftMargin = Ui.dp(ctx, 16);
+        t.setLayoutParams(tp);
+        t.addView(Ui.texte(ctx, "Vérification IP", 22f, Ui.TEXTE, true));
+        vSous = Ui.texte(ctx, "", 14f, 0xFFDCE6FF, false);
+        t.addView(vSous);
+        haut.addView(t);
+        carte.addView(haut);
+
+        TextView lib = Ui.texte(ctx, "IP :", 14f, Ui.TEXTE, false);
+        lib.setPadding(0, Ui.dp(ctx, 18), 0, 0);
+        carte.addView(lib);
+        vIp = Ui.texte(ctx, "Recherche…", 36f, Ui.TEXTE, true);
+        carte.addView(vIp);
+        addView(carte);
+
+        LinearLayout infos = Ui.carte(ctx);
+        infos.addView(ligne("FAI :"));
+        vFai = dernier;
+        infos.addView(sep());
+        infos.addView(ligne("Pays :"));
+        vPays = dernier;
+        infos.addView(sep());
+        infos.addView(ligne("Région :"));
+        vRegion = dernier;
+        infos.addView(sep());
+        infos.addView(ligne("Ville :"));
+        vVille = dernier;
+        addView(infos);
+
+        addView(Ui.bouton(ctx, "Actualiser", Ui.BLEU, this::verifier));
+        addView(Ui.bouton(ctx, "Copier l’IP", 0xFF243049, this::copier));
+        verifier();
+    }
+
+    private LinearLayout ligne(String label) {
+        LinearLayout r = Ui.info(ctx, label, "—");
+        r.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 14));
+        dernier = (TextView) r.getChildAt(1);
+        dernier.setTextSize(16f);
+        return r;
+    }
+
+    private View sep() {
+        View v = new View(ctx);
+        v.setBackgroundColor(Ui.BORD);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 1);
+        lp.leftMargin = Ui.dp(ctx, 16);
+        lp.rightMargin = Ui.dp(ctx, 16);
+        v.setLayoutParams(lp);
+        return v;
+    }
+
+    private void verifier() {
+        boolean tunnel = SuiviVpn.etat() == EtatVpn.CONNECTE;
+        vSous.setText(tunnel ? "Tunnel connecté"
+                : "Tunnel inactif : IP directe de l’appareil");
+        vIp.setText("Recherche…");
+        vFai.setText("—");
+        vPays.setText("—");
+        vRegion.setText("—");
+        vVille.setText("—");
+        new Thread(() -> {
+            String[] r;
+            try {
+                r = ipwho();
+            } catch (Exception e1) {
+                try {
+                    r = ipapi();
+                } catch (Exception e2) {
+                    r = null;
+                }
+            }
+            final String[] f = r;
+            h.post(() -> {
+                if (!attache) return;
+                if (f == null) {
+                    vIp.setText("Indisponible");
+                    vFai.setText("Vérifie ta connexion");
+                    return;
+                }
+                ip = f[0];
+                vIp.setText(f[0]);
+                vFai.setText(f[1]);
+                vPays.setText(f[2]);
+                vRegion.setText(f[3]);
+                vVille.setText(f[4]);
+            });
+        }, "yiwalo-verif-ip").start();
+    }
+
+    private static String get(String url) throws IOException {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(6000);
+        c.setReadTimeout(6000);
+        c.setRequestProperty("User-Agent", "Yiwalo/1.0");
+        try {
+            if (c.getResponseCode() != 200) throw new IOException("http");
+            BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String l;
+            while ((l = br.readLine()) != null) sb.append(l);
+            br.close();
+            return sb.toString();
+        } finally {
+            c.disconnect();
+        }
+    }
+
+    private static String v(String s) {
+        return s == null || s.isEmpty() || s.equals("null") ? "—" : s;
+    }
+
+    private static String[] ipwho() throws Exception {
+        JSONObject o = new JSONObject(get("https://ipwho.is/"));
+        if (!o.optBoolean("success", false)) throw new IOException("echec");
+        JSONObject conn = o.optJSONObject("connection");
+        return new String[]{v(o.optString("ip")),
+                conn != null ? v(conn.optString("isp")) : "—",
+                v(o.optString("country")), v(o.optString("region")), v(o.optString("city"))};
+    }
+
+    private static String[] ipapi() throws Exception {
+        JSONObject o = new JSONObject(get("https://ipapi.co/json/"));
+        if (o.optBoolean("error", false) || !o.has("ip")) throw new IOException("echec");
+        return new String[]{v(o.optString("ip")), v(o.optString("org")),
+                v(o.optString("country_name")), v(o.optString("region")), v(o.optString("city"))};
+    }
+
+    private void copier() {
+        if (ip.isEmpty()) {
+            Toast.makeText(ctx, "IP non disponible", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("IP publique", ip));
+        Toast.makeText(ctx, "IP copiée", Toast.LENGTH_SHORT).show();
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        attache = false;
+        super.onDetachedFromWindow();
+    }
+}

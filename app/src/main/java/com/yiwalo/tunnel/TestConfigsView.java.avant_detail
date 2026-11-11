@@ -1,0 +1,673 @@
+package com.yiwalo.tunnel;
+
+import android.app.AlertDialog;
+import android.content.Context;
+import android.content.res.ColorStateList;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.TextUtils;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+import com.yiwalo.tunnel.config.ConfigStore;
+import com.yiwalo.tunnel.config.Configuration;
+import com.yiwalo.tunnel.vpn.GenerateurXray;
+import java.io.File;
+import java.io.IOException;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.Inet4Address;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+final class TestConfigsView extends LinearLayout {
+    private static final class Res { int etat; long ms; boolean icmp; int recus; String note; }
+    private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
+    private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+
+    private final Context ctx;
+    private final ConfigStore store;
+    private final Handler h = new Handler(Looper.getMainLooper());
+    private final Map<String, Res> res = new HashMap<>();
+    private final Map<String, TextView> puces = new HashMap<>();
+    private final Map<String, TextView> subs = new HashMap<>();
+    private final Map<String, String> bases = new HashMap<>();
+    private List<Configuration> liste = new ArrayList<>();
+    private ExecutorService pool;
+    private int gen, faits;
+    private boolean enCours;
+    private TextView resume, bouton, supprimer;
+    private ProgressBar barre;
+    private LinearLayout conteneur;
+
+    TestConfigsView(Context ctx, ConfigStore store, Runnable retour) {
+        super(ctx);
+        this.ctx = ctx;
+        this.store = store;
+        setOrientation(VERTICAL);
+        setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), Ui.dp(ctx, 24));
+        addView(Ui.entete(ctx, "Ping des serveurs", retour));
+
+        LinearLayout c = Ui.carte(ctx);
+        int p = Ui.dp(ctx, 16);
+        c.setPadding(p, p, p, p);
+        resume = Ui.texte(ctx, "", 14f, Ui.TEXTE, true);
+        c.addView(resume);
+        barre = new ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal);
+        barre.setProgressTintList(ColorStateList.valueOf(Ui.VERT));
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(MATCH, Ui.dp(ctx, 6));
+        bp.topMargin = Ui.dp(ctx, 10);
+        c.addView(barre, bp);
+        bouton = Ui.bouton(ctx, "Lancer le ping", Ui.BLEU, this::basculer);
+        c.addView(bouton);
+        supprimer = Ui.bouton(ctx, "Supprimer les échecs", 0xFF243049, this::confirmerSuppression);
+        supprimer.setBackground(Ui.fond(ctx, 0xFF243049, 12, Ui.ROUGE));
+        supprimer.setTextColor(Ui.ROUGE);
+        supprimer.setVisibility(GONE);
+        c.addView(supprimer);
+        addView(c);
+
+        conteneur = Ui.carte(ctx);
+        addView(conteneur);
+        demarrer();
+    }
+
+    private long score(Configuration c) {
+        Res r = res.get(c.id);
+        if (r == null) return 500000;
+        switch (r.etat) {
+            case 2: return r.ms;
+            case 5: return 100000;
+            case 4: return 200000;
+            case 3: return 300000;
+            default: return 400000;
+        }
+    }
+
+    private void majPuce(String id) {
+        TextView t = puces.get(id);
+        if (t == null) return;
+        Res r = res.get(id);
+        String s = "—";
+        int col = Ui.DISCRET;
+        if (r != null) {
+            switch (r.etat) {
+                case 1: s = "Test…"; col = Ui.BLEU; break;
+                case 2:
+                    s = r.ms + " ms";
+                    col = r.ms < 150 ? Ui.VERT : r.ms < 400 ? Ui.ORANGE : Ui.ROUGE;
+                    break;
+                case 3: s = "Échec"; col = Ui.ROUGE; break;
+                case 4: s = "Non testable"; break;
+                case 5: s = "Hôte OK"; col = Ui.BLEU; break;
+                default: break;
+            }
+        }
+        t.setText(s);
+        t.setTextColor(col);
+        t.setBackground(Ui.fond(ctx, (col & 0x00FFFFFF) | 0x26000000, 14, 0));
+        TextView sv = subs.get(id);
+        String base = bases.get(id);
+        if (sv != null && base != null) {
+            String extra = "";
+            if (r != null) {
+                if (r.note != null) extra = " · " + r.note;
+                else if (r.etat == 2) extra = r.icmp ? " · ping " + r.recus + "/3" : " · TCP";
+            }
+            sv.setText(base + extra);
+        }
+    }
+
+    private View ligne(Configuration c) {
+        LinearLayout r = new LinearLayout(ctx);
+        r.setOrientation(HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 11), Ui.dp(ctx, 14), Ui.dp(ctx, 11));
+        LinearLayout t = new LinearLayout(ctx);
+        t.setOrientation(VERTICAL);
+        t.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP, 1f));
+        TextView n = Ui.texte(ctx, c.nom, 14f, Ui.TEXTE, true);
+        n.setSingleLine(true);
+        n.setEllipsize(TextUtils.TruncateAt.END);
+        t.addView(n);
+        TextView s = Ui.texte(ctx, c.type.name() + " · " + c.serveur + ":" + c.port,
+                12f, Ui.DISCRET, false);
+        s.setSingleLine(true);
+        s.setEllipsize(TextUtils.TruncateAt.END);
+        t.addView(s);
+        subs.put(c.id, s);
+        bases.put(c.id, c.type.name() + " · " + c.serveur + ":" + c.port);
+        r.addView(t);
+        TextView puce = Ui.texte(ctx, "", 12f, Ui.DISCRET, true);
+        puce.setPadding(Ui.dp(ctx, 10), Ui.dp(ctx, 5), Ui.dp(ctx, 10), Ui.dp(ctx, 5));
+        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        pp.leftMargin = Ui.dp(ctx, 10);
+        puce.setLayoutParams(pp);
+        puces.put(c.id, puce);
+        r.addView(puce);
+        majPuce(c.id);
+        return r;
+    }
+
+    private void construireListe(boolean trie) {
+        conteneur.removeAllViews();
+        puces.clear();
+        subs.clear();
+        if (liste.isEmpty()) {
+            TextView v = Ui.texte(ctx, "Aucune configuration.", 14f, Ui.DISCRET, false);
+            v.setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 14), Ui.dp(ctx, 14), Ui.dp(ctx, 14));
+            conteneur.addView(v);
+            return;
+        }
+        List<Configuration> l = new ArrayList<>(liste);
+        if (trie) Collections.sort(l, (a, b) -> Long.compare(score(a), score(b)));
+        boolean premier = true;
+        for (Configuration c : l) {
+            if (!premier) {
+                View sep = new View(ctx);
+                sep.setBackgroundColor(Ui.BORD);
+                conteneur.addView(sep, new LinearLayout.LayoutParams(MATCH, 1));
+            }
+            premier = false;
+            conteneur.addView(ligne(c));
+        }
+    }
+
+    private void majBouton() {
+        bouton.setText(enCours ? "Arrêter" : (faits > 0 ? "Relancer" : "Lancer le ping"));
+        bouton.setBackground(Ui.fond(ctx, enCours ? Ui.ROUGE : Ui.BLEU, 12, 0));
+    }
+
+    private void basculer() {
+        if (enCours) arreter(); else demarrer();
+    }
+
+    private void arreter() {
+        gen++;
+        if (pool != null) pool.shutdownNow();
+        enCours = false;
+        List<String> aRetirer = new ArrayList<>();
+        for (Map.Entry<String, Res> e : res.entrySet()) {
+            if (e.getValue().etat == 1) aRetirer.add(e.getKey());
+        }
+        for (String id : aRetirer) res.remove(id);
+        for (Configuration c : liste) majPuce(c.id);
+        resume.setText("Arrêté : " + faits + "/" + liste.size());
+        majBouton();
+    }
+
+    private void demarrer() {
+        liste = store.lister();
+        res.clear();
+        faits = 0;
+        supprimer.setVisibility(GONE);
+        if (liste.isEmpty()) {
+            resume.setText("Aucune configuration");
+            barre.setVisibility(GONE);
+            bouton.setVisibility(GONE);
+            construireListe(false);
+            return;
+        }
+        if (pool != null) pool.shutdownNow();
+        final int g = ++gen;
+        enCours = true;
+        barre.setMax(liste.size());
+        barre.setProgress(0);
+        resume.setText("0/" + liste.size());
+        majBouton();
+        construireListe(false);
+        pool = Executors.newFixedThreadPool(4);
+        for (final Configuration c : liste) {
+            pool.execute(() -> {
+                if (g != gen) return;
+                h.post(() -> {
+                    if (g != gen) return;
+                    Res enCoursRes = new Res();
+                    enCoursRes.etat = 1;
+                    res.put(c.id, enCoursRes);
+                    majPuce(c.id);
+                });
+                final Res r = tester(c);
+                h.post(() -> {
+                    if (g != gen) return;
+                    res.put(c.id, r);
+                    majPuce(c.id);
+                    faits++;
+                    barre.setProgress(faits);
+                    resume.setText(faits + "/" + liste.size());
+                    if (faits == liste.size()) fin();
+                });
+            });
+        }
+    }
+
+    private Res pingIcmp(String ip) {
+        try {
+            Process p = new ProcessBuilder("/system/bin/ping", "-c", "3", "-W", "2", "-w", "8", ip)
+                    .redirectErrorStream(true).start();
+            Pattern pat = Pattern.compile("time[=<]([0-9.]+)\\s*ms");
+            double somme = 0;
+            int n = 0;
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(
+                    p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                String l;
+                while ((l = br.readLine()) != null) {
+                    Matcher m = pat.matcher(l);
+                    if (m.find()) {
+                        somme += Double.parseDouble(m.group(1));
+                        n++;
+                    }
+                }
+            }
+            p.destroy();
+            if (n == 0) return null;
+            Res r = new Res();
+            r.etat = 2;
+            r.icmp = true;
+            r.recus = n;
+            r.ms = Math.max(1, Math.round(somme / n));
+            return r;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String raison(Exception e) {
+        if (e instanceof java.net.SocketTimeoutException) return "TCP : délai dépassé";
+        if (e instanceof java.net.ConnectException) return "TCP : connexion refusée";
+        if (e instanceof java.net.NoRouteToHostException) return "TCP : pas de route";
+        if (e instanceof java.net.UnknownHostException) return "hôte introuvable";
+        return "TCP : " + e.getClass().getSimpleName();
+    }
+
+    private byte[] requeteDns(String domaine) {
+        java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
+        java.util.Random rnd = new java.util.Random();
+        int id = rnd.nextInt(65536);
+        o.write(id >> 8);
+        o.write(id & 0xFF);
+        o.write(0x01); o.write(0x00);
+        o.write(0); o.write(1);
+        o.write(0); o.write(0); o.write(0); o.write(0); o.write(0); o.write(0);
+        String nom = "yw" + Integer.toHexString(rnd.nextInt(0xFFFFF)) + "." + domaine;
+        for (String lab : nom.split("\\.")) {
+            if (lab.isEmpty()) continue;
+            byte[] b = lab.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            int n = Math.min(b.length, 63);
+            o.write(n);
+            o.write(b, 0, n);
+        }
+        o.write(0);
+        o.write(0); o.write(16);
+        o.write(0); o.write(1);
+        return o.toByteArray();
+    }
+
+    /** Slow DNS : vraie requête DNS vers le résolveur pour le domaine NS de la configuration. */
+    private Res dnsTest(Configuration c) {
+        Res r = new Res();
+        String[] noms = {"NOERROR", "FORMERR", "SERVFAIL", "NXDOMAIN", "NOTIMP", "REFUSED"};
+        String liste = (c.slowResolveur == null || c.slowResolveur.trim().isEmpty())
+                ? "8.8.8.8" : c.slowResolveur;
+        String domaine = c.slowNs.trim();
+        long best = Long.MAX_VALUE;
+        String note = null;
+        String echec = "résolveur sans réponse";
+        for (String tok : liste.split("[\\s,;]+")) {
+            if (tok.isEmpty()) continue;
+            String hote = tok;
+            int port = 53;
+            int k = tok.lastIndexOf(':');
+            if (k > 0 && tok.indexOf(':') == k) {
+                try {
+                    port = Integer.parseInt(tok.substring(k + 1));
+                    hote = tok.substring(0, k);
+                } catch (NumberFormatException ignore) {
+                    // pas de port
+                }
+            }
+            DatagramSocket so = null;
+            try {
+                InetAddress a = InetAddress.getByName(hote);
+                byte[] q = requeteDns(domaine);
+                so = new DatagramSocket();
+                so.setSoTimeout(3000);
+                long t0 = System.nanoTime();
+                so.send(new DatagramPacket(q, q.length, a, port));
+                byte[] buf = new byte[1500];
+                DatagramPacket rep = new DatagramPacket(buf, buf.length);
+                so.receive(rep);
+                long ms = (System.nanoTime() - t0) / 1000000L;
+                if (rep.getLength() >= 12 && buf[0] == q[0] && buf[1] == q[1]
+                        && (buf[2] & 0x80) != 0) {
+                    int rc = buf[3] & 0x0F;
+                    if (rc == 2) {
+                        echec = "SERVFAIL : serveur NS injoignable";
+                    } else if (rc == 5) {
+                        echec = "résolveur : REFUSED";
+                    } else if (ms < best) {
+                        best = ms;
+                        note = "DNS " + (rc < noms.length ? noms[rc] : "rc" + rc);
+                    }
+                }
+            } catch (java.net.SocketTimeoutException e) {
+                echec = "résolveur : délai dépassé";
+            } catch (Exception e) {
+                echec = "résolveur : " + e.getClass().getSimpleName();
+            } finally {
+                if (so != null) so.close();
+            }
+        }
+        if (best != Long.MAX_VALUE) {
+            r.etat = 2;
+            r.ms = Math.max(1, best);
+            r.note = note;
+        } else {
+            r.etat = 3;
+            r.note = echec;
+        }
+        return r;
+    }
+
+    private static String court(String s) {
+        if (s == null) return "";
+        s = s.trim();
+        int n = s.indexOf('\n');
+        if (n > 0) s = s.substring(0, n);
+        return s.length() > 70 ? s.substring(0, 70) : s;
+    }
+
+    private static void lireTout(java.io.InputStream in, byte[] b) throws IOException {
+        int n = 0;
+        while (n < b.length) {
+            int k = in.read(b, n, b.length - n);
+            if (k < 0) throw new IOException("connexion coupée par le serveur");
+            n += k;
+        }
+    }
+
+    private static String raisonSocks(int code) {
+        switch (code) {
+            case 1: return "échec général du serveur";
+            case 2: return "règle du serveur : refusé";
+            case 3: return "réseau injoignable";
+            case 4: return "serveur injoignable";
+            case 5: return "connexion refusée par le serveur";
+            case 6: return "délai dépassé (serveur injoignable)";
+            default: return "erreur SOCKS " + code;
+        }
+    }
+
+    /** Requête HTTP réelle à travers le moteur (SOCKS local), temps total en ms. */
+    private long viaSocks(int port, String user, String pass) throws IOException {
+        Socket s = new Socket();
+        try {
+            long t0 = System.nanoTime();
+            s.connect(new InetSocketAddress("127.0.0.1", port), 2000);
+            s.setSoTimeout(8000);
+            java.io.OutputStream o = s.getOutputStream();
+            java.io.InputStream in = s.getInputStream();
+            o.write(new byte[]{5, 1, 2});
+            o.flush();
+            byte[] rep = new byte[2];
+            lireTout(in, rep);
+            if (rep[0] != 5 || rep[1] != 2) throw new IOException("moteur : authentification refusée");
+            byte[] u = user.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            byte[] pw = pass.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            java.io.ByteArrayOutputStream a = new java.io.ByteArrayOutputStream();
+            a.write(1);
+            a.write(u.length);
+            a.write(u, 0, u.length);
+            a.write(pw.length);
+            a.write(pw, 0, pw.length);
+            o.write(a.toByteArray());
+            o.flush();
+            lireTout(in, rep);
+            if (rep[1] != 0) throw new IOException("moteur : identifiants refusés");
+            byte[] h = "cp.cloudflare.com".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            java.io.ByteArrayOutputStream q = new java.io.ByteArrayOutputStream();
+            q.write(5);
+            q.write(1);
+            q.write(0);
+            q.write(3);
+            q.write(h.length);
+            q.write(h, 0, h.length);
+            q.write(0);
+            q.write(80);
+            o.write(q.toByteArray());
+            o.flush();
+            byte[] e = new byte[4];
+            lireTout(in, e);
+            if (e[1] != 0) throw new IOException(raisonSocks(e[1]));
+            int atyp = e[3];
+            int reste = atyp == 1 ? 6 : atyp == 4 ? 18 : in.read() + 2;
+            byte[] saut = new byte[Math.max(0, reste)];
+            lireTout(in, saut);
+            o.write(("GET /generate_204 HTTP/1.1\r\nHost: cp.cloudflare.com\r\n"
+                    + "Connection: close\r\n\r\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            o.flush();
+            byte[] b = new byte[12];
+            lireTout(in, b);
+            String st = new String(b, java.nio.charset.StandardCharsets.US_ASCII);
+            if (!st.startsWith("HTTP/1.")) throw new IOException("réponse inattendue du serveur");
+            return (System.nanoTime() - t0) / 1000000L;
+        } finally {
+            try { s.close(); } catch (Exception ignore) { }
+        }
+    }
+
+    /** Test réel : lance le moteur Xray avec cette configuration, sans interface TUN. */
+    private Res xrayTest(Configuration c) {
+        Res r = new Res();
+        File xray = new File(ctx.getApplicationInfo().nativeLibraryDir, "libxray.so");
+        if (!xray.exists()) return null;
+        Process p = null;
+        File cfg = null;
+        try {
+            GenerateurXray.Resultat g = GenerateurXray.generer(c, c.serveur);
+            JSONObject o = new JSONObject(g.json);
+            JSONArray in = o.getJSONArray("inbounds");
+            JSONArray garde = new JSONArray();
+            for (int i = 0; i < in.length(); i++) {
+                JSONObject x = in.getJSONObject(i);
+                if (!"tun".equals(x.optString("protocol"))) garde.put(x);
+            }
+            o.put("inbounds", garde);
+            File dossier = new File(ctx.getCacheDir(), "tests");
+            dossier.mkdirs();
+            cfg = File.createTempFile("t", ".json", dossier);
+            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(cfg)) {
+                fo.write(o.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            p = new ProcessBuilder(xray.getAbsolutePath(), "run", "-c", cfg.getAbsolutePath())
+                    .redirectErrorStream(true).start();
+            boolean pret = false;
+            for (int i = 0; i < 30 && !pret && p.isAlive(); i++) {
+                Socket s = new Socket();
+                try {
+                    s.connect(new InetSocketAddress("127.0.0.1", g.portTest), 200);
+                    pret = true;
+                } catch (Exception e) {
+                    Thread.sleep(150);
+                } finally {
+                    try { s.close(); } catch (Exception ignore) { }
+                }
+            }
+            if (!pret) {
+                String sortie = "";
+                try {
+                    java.io.InputStream es = p.getInputStream();
+                    if (es.available() > 0) {
+                        byte[] b = new byte[400];
+                        sortie = new String(b, 0, es.read(b), java.nio.charset.StandardCharsets.UTF_8);
+                    }
+                } catch (Exception ignore) {
+                    // pas de sortie
+                }
+                r.etat = 3;
+                r.note = "moteur : " + (sortie.isEmpty() ? "démarrage impossible" : court(sortie));
+                return r;
+            }
+            long best = Long.MAX_VALUE;
+            String erreur = null;
+            for (int k = 0; k < 2; k++) {
+                try {
+                    best = Math.min(best, viaSocks(g.portTest, g.utilisateurTest, g.motDePasseTest));
+                } catch (java.net.SocketTimeoutException e) {
+                    erreur = "délai dépassé (serveur injoignable)";
+                    break;
+                } catch (Exception e) {
+                    erreur = court(e.getMessage());
+                    break;
+                }
+            }
+            if (best == Long.MAX_VALUE) {
+                r.etat = 3;
+                r.note = erreur == null || erreur.isEmpty() ? "échec" : erreur;
+            } else {
+                r.etat = 2;
+                r.ms = Math.max(1, best);
+                r.note = "test réel";
+            }
+            return r;
+        } catch (Exception e) {
+            r.etat = 3;
+            r.note = court(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            return r;
+        } finally {
+            if (p != null) p.destroyForcibly();
+            if (cfg != null) cfg.delete();
+        }
+    }
+
+    private Res tester(Configuration c) {
+        Res r = new Res();
+        String t = c.type.name().toUpperCase(Locale.ROOT);
+        boolean slow = c.slowNs != null && !c.slowNs.trim().isEmpty();
+        boolean udp = t.contains("UDP") || t.contains("HYSTERIA")
+                || t.contains("QUIC") || t.contains("DNS");
+        if (slow) return dnsTest(c);
+        if (!t.equals("SLOWDNS")) {
+            Res x = xrayTest(c);
+            if (x != null) return x;
+        }
+        InetAddress a;
+        try {
+            a = InetAddress.getByName(c.serveur);
+        } catch (Exception e) {
+            r.etat = udp ? 4 : 3;
+            r.note = "hôte introuvable";
+            return r;
+        }
+        if (a instanceof Inet4Address) {
+            Res i = pingIcmp(a.getHostAddress());
+            if (i != null) return i;
+        }
+        if (udp) {
+            r.etat = 5;
+            r.note = "hôte résolu (UDP)";
+            return r;
+        }
+        long best = Long.MAX_VALUE;
+        for (int k = 0; k < 2; k++) {
+            Socket so = new Socket();
+            try {
+                long t0 = System.nanoTime();
+                so.connect(new InetSocketAddress(a, c.port), 4000);
+                best = Math.min(best, (System.nanoTime() - t0) / 1000000L);
+            } catch (Exception e) {
+                if (k == 0) {
+                    r.etat = 3;
+                    r.note = raison(e);
+                    return r;
+                }
+            } finally {
+                try { so.close(); } catch (Exception ignore) { }
+            }
+        }
+        r.etat = 2;
+        r.ms = best;
+        return r;
+    }
+
+    private void fin() {
+        enCours = false;
+        int ok = 0, ech = 0;
+        Configuration meilleure = null;
+        long mm = Long.MAX_VALUE;
+        for (Configuration c : liste) {
+            Res r = res.get(c.id);
+            if (r == null) continue;
+            if (r.etat == 2) {
+                ok++;
+                if (r.ms < mm) { mm = r.ms; meilleure = c; }
+            } else if (r.etat == 3) {
+                ech++;
+            }
+        }
+        String s = ok + " sur " + liste.size() + " répondent";
+        if (meilleure != null) s += "\nLa plus rapide : " + meilleure.nom + " (" + mm + " ms)";
+        resume.setText(s);
+        majBouton();
+        construireListe(true);
+        if (ech > 0) {
+            supprimer.setText("Supprimer les échecs (" + ech + ")");
+            supprimer.setVisibility(VISIBLE);
+        }
+    }
+
+    private void confirmerSuppression() {
+        final List<Configuration> mauvaises = new ArrayList<>();
+        for (Configuration c : liste) {
+            Res r = res.get(c.id);
+            if (r != null && r.etat == 3) mauvaises.add(c);
+        }
+        if (mauvaises.isEmpty()) return;
+        try {
+            new AlertDialog.Builder(ctx, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle("Supprimer " + mauvaises.size()
+                            + (mauvaises.size() > 1 ? " configurations ?" : " configuration ?"))
+                    .setMessage("Elles ne répondent pas. Cette action est définitive.")
+                    .setPositiveButton("Supprimer", (x, y) -> {
+                        for (Configuration c : mauvaises) {
+                            store.supprimer(c.id);
+                            res.remove(c.id);
+                            liste.remove(c);
+                        }
+                        supprimer.setVisibility(GONE);
+                        resume.setText(liste.size()
+                                + (liste.size() > 1 ? " configurations restantes"
+                                : " configuration restante"));
+                        construireListe(true);
+                    })
+                    .setNegativeButton("Annuler", null)
+                    .show();
+        } catch (RuntimeException ignore) {
+            // fenêtre indisponible
+        }
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        gen++;
+        if (pool != null) pool.shutdownNow();
+        super.onDetachedFromWindow();
+    }
+}

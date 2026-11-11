@@ -1,0 +1,171 @@
+package com.yiwalo.tunnel;
+
+import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.os.Build;
+import android.provider.Settings;
+import android.util.Base64;
+import com.yiwalo.tunnel.config.Configuration;
+import java.io.File;
+import java.security.SecureRandom;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import javax.crypto.Cipher;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
+import org.json.JSONObject;
+
+public final class PartageConfig {
+    public static final String PREFIXE = "YIWALO1:";
+    public static final String PREFIXE_MDP = "YIWALO2:";
+
+    public static final class Options {
+        public long expire;
+        public String message = "";
+        public boolean verrouille, mobile, root, store;
+        public String appareils = "";
+        public String mdp = "";
+    }
+
+    private PartageConfig() {}
+
+    private static SecretKeySpec cle(String mdp) throws Exception {
+        if (mdp != null && !mdp.isEmpty()) {
+            SecretKeyFactory f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1");
+            byte[] k = f.generateSecret(new PBEKeySpec(mdp.toCharArray(),
+                    "YIWALO-SEL".getBytes("UTF-8"), 20000, 256)).getEncoded();
+            return new SecretKeySpec(k, "AES");
+        }
+        byte[] h = java.security.MessageDigest.getInstance("SHA-256")
+                .digest("YIWALO-TUNNEL-cle-interne-2026".getBytes("UTF-8"));
+        return new SecretKeySpec(h, "AES");
+    }
+
+    public static boolean estCode(String t) {
+        return t != null && (t.contains(PREFIXE) || t.contains(PREFIXE_MDP));
+    }
+
+    public static boolean necessiteMotDePasse(String t) {
+        return t != null && t.contains(PREFIXE_MDP);
+    }
+
+    public static String exporter(Configuration c, Options o) throws Exception {
+        JSONObject j = c.versJson();
+        j.put("exp", o.expire);
+        j.put("msg", o.message);
+        j.put("lock", o.verrouille);
+        j.put("mob", o.mobile);
+        j.put("root", o.root);
+        j.put("store", o.store);
+        j.put("dev", o.appareils);
+        boolean avecMdp = o.mdp != null && !o.mdp.isEmpty();
+        byte[] iv = new byte[12];
+        new SecureRandom().nextBytes(iv);
+        Cipher ci = Cipher.getInstance("AES/GCM/NoPadding");
+        ci.init(Cipher.ENCRYPT_MODE, cle(o.mdp), new GCMParameterSpec(128, iv));
+        byte[] chiffre = ci.doFinal(j.toString().getBytes("UTF-8"));
+        byte[] tout = new byte[12 + chiffre.length];
+        System.arraycopy(iv, 0, tout, 0, 12);
+        System.arraycopy(chiffre, 0, tout, 12, chiffre.length);
+        return (avecMdp ? PREFIXE_MDP : PREFIXE)
+                + Base64.encodeToString(tout, Base64.NO_WRAP | Base64.URL_SAFE);
+    }
+
+    public static Configuration importer(String texte, String mdp) throws Exception {
+        String t = texte.trim();
+        boolean avecMdp = t.contains(PREFIXE_MDP);
+        String pre = avecMdp ? PREFIXE_MDP : PREFIXE;
+        int p = t.indexOf(pre);
+        if (p < 0) throw new Exception("pas un code yiwalo");
+        t = t.substring(p + pre.length()).replaceAll("\\s", "");
+        byte[] tout = Base64.decode(t, Base64.URL_SAFE);
+        Cipher ci = Cipher.getInstance("AES/GCM/NoPadding");
+        ci.init(Cipher.DECRYPT_MODE, cle(avecMdp ? mdp : ""),
+                new GCMParameterSpec(128, tout, 0, 12));
+        byte[] clair = ci.doFinal(tout, 12, tout.length - 12);
+        return Configuration.depuisJson(new JSONObject(new String(clair, "UTF-8")));
+    }
+
+    public static boolean expiree(Configuration c) {
+        return c.expireLe > 0 && System.currentTimeMillis() > c.expireLe;
+    }
+
+    public static String formater(long ms) {
+        return new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.FRANCE).format(new Date(ms));
+    }
+
+    public static String idAppareil(Context ctx) {
+        String id = Settings.Secure.getString(ctx.getContentResolver(),
+                Settings.Secure.ANDROID_ID);
+        return id == null ? "inconnu" : id;
+    }
+
+    private static boolean appareilRoote() {
+        String[] chemins = {"/system/bin/su", "/system/xbin/su", "/sbin/su", "/su/bin/su",
+                "/data/local/bin/su", "/data/local/xbin/su", "/system/app/Superuser.apk"};
+        for (String s : chemins) if (new File(s).exists()) return true;
+        String tags = Build.TAGS;
+        return tags != null && tags.contains("test-keys");
+    }
+
+    private static boolean storeOfficiel(Context ctx) {
+        try {
+            String pkg = ctx.getPackageName();
+            String src;
+            if (Build.VERSION.SDK_INT >= 30) {
+                src = ctx.getPackageManager().getInstallSourceInfo(pkg).getInstallingPackageName();
+            } else {
+                src = ctx.getPackageManager().getInstallerPackageName(pkg);
+            }
+            if (src == null) return false;
+            String[] ok = {"com.android.vending", "com.sec.android.app.samsungapps",
+                    "com.huawei.appmarket", "com.xiaomi.mipicks", "com.amazon.venezia"};
+            for (String s : ok) if (s.equals(src)) return true;
+        } catch (Exception e) {
+            // refus par défaut
+        }
+        return false;
+    }
+
+    private static boolean donneesMobiles(Context ctx) {
+        try {
+            ConnectivityManager cm = (ConnectivityManager)
+                    ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            boolean cell = false, wifi = false;
+            for (Network n : cm.getAllNetworks()) {
+                NetworkCapabilities nc = cm.getNetworkCapabilities(n);
+                if (nc == null) continue;
+                if (nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) wifi = true;
+                if (nc.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) cell = true;
+            }
+            return cell && !wifi;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Retourne null si tout est bon, sinon le message de refus. */
+    public static String verifierAcces(Context ctx, Configuration c) {
+        if (expiree(c)) return "Configuration expirée le " + formater(c.expireLe);
+        if (c.bloquerRoot && appareilRoote())
+            return "Appareil rooté : cette configuration est interdite ici.";
+        if (c.storeSeulement && !storeOfficiel(ctx))
+            return "Cette configuration exige une application installée depuis un store officiel.";
+        if (c.mobileSeulement && !donneesMobiles(ctx))
+            return "Cette configuration fonctionne uniquement avec les données mobiles (désactive le Wi-Fi).";
+        if (c.appareils != null && !c.appareils.trim().isEmpty()) {
+            String id = idAppareil(ctx);
+            boolean ok = false;
+            for (String s : c.appareils.trim().split("[,;\\s]+")) {
+                if (s.equalsIgnoreCase(id)) ok = true;
+            }
+            if (!ok) return "Appareil non autorisé.\nID de cet appareil : " + id;
+        }
+        return null;
+    }
+}

@@ -1,0 +1,427 @@
+package com.yiwalo.tunnel.config;
+
+import android.util.Base64;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.UnsupportedEncodingException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.regex.Pattern;
+
+public final class ImportateurLiens {
+
+    private static final Pattern MODELE_UUID = Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+
+    private static final Set<String> RESEAUX = new HashSet<>(Arrays.asList(
+            "tcp", "ws", "grpc", "httpupgrade", "xhttp", "splithttp", "kcp", "h2", "http"));
+
+    private static final Set<String> SECURITES = new HashSet<>(Arrays.asList(
+            "none", "tls", "reality"));
+
+    private static final Set<String> METHODES_SS = new HashSet<>(Arrays.asList(
+            "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305", "chacha20-ietf-poly1305",
+            "xchacha20-poly1305", "xchacha20-ietf-poly1305",
+            "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm",
+            "2022-blake3-chacha20-poly1305"));
+
+    private ImportateurLiens() {
+    }
+
+    public static final class Resultat {
+        public final List<Configuration> configurations = new ArrayList<>();
+        public final List<String> erreurs = new ArrayList<>();
+    }
+
+    private static final class HotePort {
+        String hote;
+        int port;
+    }
+
+    private static final class Lien {
+        String info;
+        HotePort adresse;
+        Map<String, String> parametres = new HashMap<>();
+        String nom = "";
+    }
+
+    public static Resultat importer(String texte) {
+        Resultat resultat = new Resultat();
+        if (texte == null || texte.trim().isEmpty()) {
+            resultat.erreurs.add("Le contenu est vide.");
+            return resultat;
+        }
+        int numero = 0;
+        for (String brute : texte.split("\\r?\\n")) {
+            String ligne = brute.trim();
+            if (ligne.isEmpty()) {
+                continue;
+            }
+            numero++;
+            try {
+                resultat.configurations.add(analyser(ligne));
+            } catch (ErreurImport e) {
+                resultat.erreurs.add("Ligne " + numero + " : " + e.getMessage());
+            }
+        }
+        return resultat;
+    }
+
+    public static Configuration analyser(String lien) throws ErreurImport {
+        String bas = lien.toLowerCase(Locale.ROOT);
+        if (bas.startsWith("vless://")) {
+            return analyserVless(lien);
+        }
+        if (bas.startsWith("vmess://")) {
+            return analyserVmess(lien);
+        }
+        if (bas.startsWith("trojan://")) {
+            return analyserTrojan(lien);
+        }
+        if (bas.startsWith("ss://")) {
+            return analyserShadowsocks(lien);
+        }
+        if (bas.startsWith("http://") || bas.startsWith("https://")) {
+            throw new ErreurImport("Ceci est une adresse web et non une configuration. "
+                    + "Les liens d'abonnement se gèrent dans l'onglet Abonnements.");
+        }
+        throw new ErreurImport("Format non reconnu. Formats pris en charge : "
+                + "vless://, vmess://, trojan:// et ss://. Les fichiers d'autres applications "
+                + "(HTTP Injector, HTTP Custom, NPV Tunnel) ne sont pas directement compatibles.");
+    }
+
+    private static Configuration analyserVless(String lien) throws ErreurImport {
+        Lien l = decouper(lien, "vless://".length());
+        if (!MODELE_UUID.matcher(l.info).matches()) {
+            throw new ErreurImport("L'identifiant (UUID) VLESS est invalide.");
+        }
+        String chiffrement = l.parametres.get("encryption");
+        if (chiffrement != null && !chiffrement.isEmpty() && !chiffrement.equals("none")) {
+            throw new ErreurImport("Ce paramètre de chiffrement VLESS n'est pas pris en charge "
+                    + "pour l'instant. Seule la valeur « none » est acceptée.");
+        }
+        verifierTransport(l.parametres);
+        return creer(TypeConnexion.VLESS, l.nom, l.adresse, lien);
+    }
+
+    private static Configuration analyserTrojan(String lien) throws ErreurImport {
+        Lien l = decouper(lien, "trojan://".length());
+        if (l.info.isEmpty()) {
+            throw new ErreurImport("Le mot de passe Trojan est vide.");
+        }
+        verifierTransport(l.parametres);
+        return creer(TypeConnexion.TROJAN, l.nom, l.adresse, lien);
+    }
+
+    private static Configuration analyserVmess(String lien) throws ErreurImport {
+        String contenu = lien.substring("vmess://".length()).trim();
+        String ancre = "";
+        int d = contenu.indexOf('#');
+        if (d >= 0) {
+            ancre = decoder(contenu.substring(d + 1)).trim();
+            contenu = contenu.substring(0, d).trim();
+        }
+        JSONObject j;
+        try {
+            if (contenu.contains("@")) {
+                j = vmessDepuisUri(contenu, ancre);
+            } else {
+                j = new JSONObject(decoderVmess(contenu));
+            }
+        } catch (JSONException e) {
+            throw new ErreurImport("Le lien VMess est mal formé : le contenu décodé "
+                    + "n'est pas un JSON valide.");
+        }
+        HotePort adresse = new HotePort();
+        adresse.hote = j.optString("add", "").trim();
+        if (adresse.hote.isEmpty()) {
+            throw new ErreurImport("L'adresse du serveur VMess est manquante.");
+        }
+        adresse.port = analyserPort(j.optString("port", "").trim());
+        if (j.optString("id", "").trim().isEmpty()) {
+            throw new ErreurImport("L'identifiant VMess est manquant.");
+        }
+        String reseau = j.optString("net", "tcp").trim().toLowerCase(Locale.ROOT);
+        if (reseau.isEmpty()) {
+            reseau = "tcp";
+        }
+        if (reseau.equals("websocket")) {
+            reseau = "ws";
+        }
+        if (!RESEAUX.contains(reseau)) {
+            throw new ErreurImport("Type de transport VMess « " + reseau + " » non reconnu.");
+        }
+        String nom = j.optString("ps", "").trim();
+        if (nom.isEmpty()) {
+            nom = ancre;
+        }
+        try {
+            j.put("net", reseau);
+            j.put("ps", nom);
+            j.put("id", j.optString("id", "").trim());
+        } catch (JSONException e) {
+            throw new ErreurImport("Le lien VMess est mal formé.");
+        }
+        String canonique = "vmess://" + android.util.Base64.encodeToString(
+                j.toString().getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP);
+        return creer(TypeConnexion.VMESS, nom, adresse, canonique);
+    }
+
+    private static String decoderVmess(String contenu) throws ErreurImport {
+        String s = contenu.replaceAll("\\s", "").replace('-', '+').replace('_', '/');
+        while (s.length() % 4 != 0) {
+            s += "=";
+        }
+        try {
+            byte[] octets = android.util.Base64.decode(s, android.util.Base64.DEFAULT);
+            return new String(octets, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            throw new ErreurImport("Le lien VMess est mal formé : encodage illisible.");
+        }
+    }
+
+    private static JSONObject vmessDepuisUri(String contenu, String ancre)
+            throws ErreurImport, JSONException {
+        String corps = contenu;
+        String requete = "";
+        int q = contenu.indexOf('?');
+        if (q >= 0) {
+            requete = contenu.substring(q + 1);
+            corps = contenu.substring(0, q);
+        }
+        int at = corps.lastIndexOf('@');
+        if (at <= 0) {
+            throw new ErreurImport("Le lien VMess est mal formé : identifiant manquant.");
+        }
+        String id = decoder(corps.substring(0, at)).trim();
+        HotePort hp = hotePort(corps.substring(at + 1));
+        java.util.Map<String, String> p = new java.util.HashMap<>();
+        for (String paire : requete.split("&")) {
+            int e = paire.indexOf('=');
+            if (e > 0) {
+                p.put(paire.substring(0, e), decoder(paire.substring(e + 1)));
+            }
+        }
+        String reseau = valeur(p, "type", "tcp").toLowerCase(Locale.ROOT);
+        JSONObject j = new JSONObject();
+        j.put("v", "2");
+        j.put("ps", ancre);
+        j.put("add", hp.hote);
+        j.put("port", String.valueOf(hp.port));
+        j.put("id", id);
+        j.put("net", reseau);
+        j.put("tls", valeur(p, "security", "").equalsIgnoreCase("tls") ? "tls" : "");
+        j.put("sni", valeur(p, "sni", ""));
+        j.put("host", valeur(p, "host", ""));
+        String chemin = reseau.equals("grpc")
+                ? valeur(p, "serviceName", valeur(p, "path", ""))
+                : valeur(p, "path", "");
+        j.put("path", chemin);
+        j.put("alpn", valeur(p, "alpn", ""));
+        j.put("fp", valeur(p, "fp", ""));
+        j.put("scy", valeur(p, "encryption", "auto"));
+        j.put("aid", "0");
+        j.put("type", valeur(p, "headerType", "none"));
+        return j;
+    }
+
+    private static Configuration analyserShadowsocks(String lien) throws ErreurImport {
+        String reste = lien.substring("ss://".length());
+        String nom = "";
+        int diese = reste.indexOf('#');
+        if (diese >= 0) {
+            nom = decoder(reste.substring(diese + 1));
+            reste = reste.substring(0, diese);
+        }
+        int interro = reste.indexOf('?');
+        if (interro >= 0) {
+            String requete = reste.substring(interro + 1).toLowerCase(Locale.ROOT);
+            if (requete.contains("plugin=")) {
+                throw new ErreurImport("Les plugins Shadowsocks (v2ray-plugin, obfs...) "
+                        + "ne sont pas pris en charge.");
+            }
+            reste = reste.substring(0, interro);
+        }
+        while (reste.endsWith("/")) {
+            reste = reste.substring(0, reste.length() - 1);
+        }
+
+        String methodeEtMotDePasse;
+        String adresseTexte;
+        int arobase = reste.lastIndexOf('@');
+        if (arobase >= 0) {
+            String info = decoder(reste.substring(0, arobase));
+            methodeEtMotDePasse = info.contains(":")
+                    ? info
+                    : new String(decoderBase64(info), StandardCharsets.UTF_8);
+            adresseTexte = reste.substring(arobase + 1);
+        } else {
+            String decode = new String(decoderBase64(reste), StandardCharsets.UTF_8);
+            int a = decode.lastIndexOf('@');
+            if (a < 0) {
+                throw new ErreurImport("Le lien Shadowsocks est mal formé.");
+            }
+            methodeEtMotDePasse = decode.substring(0, a);
+            adresseTexte = decode.substring(a + 1);
+        }
+
+        int deuxPoints = methodeEtMotDePasse.indexOf(':');
+        if (deuxPoints < 0) {
+            throw new ErreurImport("La méthode ou le mot de passe Shadowsocks est manquant.");
+        }
+        String methode = methodeEtMotDePasse.substring(0, deuxPoints).toLowerCase(Locale.ROOT);
+        String motDePasse = methodeEtMotDePasse.substring(deuxPoints + 1);
+        if (!METHODES_SS.contains(methode)) {
+            throw new ErreurImport("Méthode de chiffrement Shadowsocks « " + methode
+                    + " » non prise en charge.");
+        }
+        if (motDePasse.isEmpty()) {
+            throw new ErreurImport("Le mot de passe Shadowsocks est vide.");
+        }
+        return creer(TypeConnexion.SHADOWSOCKS, nom, hotePort(adresseTexte), lien);
+    }
+
+    private static Lien decouper(String lien, int longueurSchema) throws ErreurImport {
+        Lien l = new Lien();
+        String reste = lien.substring(longueurSchema);
+        int diese = reste.indexOf('#');
+        if (diese >= 0) {
+            l.nom = decoder(reste.substring(diese + 1));
+            reste = reste.substring(0, diese);
+        }
+        String requete = "";
+        int interro = reste.indexOf('?');
+        if (interro >= 0) {
+            requete = reste.substring(interro + 1);
+            reste = reste.substring(0, interro);
+        }
+        while (reste.endsWith("/")) {
+            reste = reste.substring(0, reste.length() - 1);
+        }
+        int arobase = reste.lastIndexOf('@');
+        if (arobase < 0) {
+            throw new ErreurImport("Identifiant manquant (partie avant le @).");
+        }
+        l.info = decoder(reste.substring(0, arobase));
+        l.adresse = hotePort(reste.substring(arobase + 1));
+        for (String paire : requete.split("&")) {
+            if (paire.isEmpty()) {
+                continue;
+            }
+            int egal = paire.indexOf('=');
+            if (egal < 0) {
+                l.parametres.put(decoder(paire), "");
+            } else {
+                l.parametres.put(decoder(paire.substring(0, egal)),
+                        decoder(paire.substring(egal + 1)));
+            }
+        }
+        return l;
+    }
+
+    private static void verifierTransport(Map<String, String> p) throws ErreurImport {
+        String reseau = valeur(p, "type", "tcp").toLowerCase(Locale.ROOT);
+        if (!RESEAUX.contains(reseau)) {
+            throw new ErreurImport("Type de transport « " + reseau + " » non reconnu.");
+        }
+        String securite = valeur(p, "security", "none").toLowerCase(Locale.ROOT);
+        if (!SECURITES.contains(securite)) {
+            throw new ErreurImport("Type de sécurité « " + securite + " » non reconnu.");
+        }
+        if (securite.equals("reality") && valeur(p, "pbk", "").isEmpty()) {
+            throw new ErreurImport("Clé publique Reality (pbk) manquante.");
+        }
+    }
+
+    private static String valeur(Map<String, String> p, String cle, String defaut) {
+        String v = p.get(cle);
+        return (v == null || v.isEmpty()) ? defaut : v;
+    }
+
+    private static HotePort hotePort(String texte) throws ErreurImport {
+        HotePort r = new HotePort();
+        String portTexte;
+        if (texte.startsWith("[")) {
+            int fin = texte.indexOf(']');
+            if (fin < 0 || texte.length() <= fin + 1 || texte.charAt(fin + 1) != ':') {
+                throw new ErreurImport("Adresse IPv6 ou port invalide.");
+            }
+            r.hote = texte.substring(1, fin);
+            portTexte = texte.substring(fin + 2);
+        } else {
+            int deuxPoints = texte.lastIndexOf(':');
+            if (deuxPoints < 0) {
+                throw new ErreurImport("Port manquant.");
+            }
+            r.hote = texte.substring(0, deuxPoints);
+            portTexte = texte.substring(deuxPoints + 1);
+        }
+        r.hote = r.hote.trim();
+        if (r.hote.isEmpty()) {
+            throw new ErreurImport("Adresse du serveur manquante.");
+        }
+        r.port = analyserPort(portTexte);
+        return r;
+    }
+
+    private static int analyserPort(String texte) throws ErreurImport {
+        try {
+            int port = Integer.parseInt(texte.trim());
+            if (port < 1 || port > 65535) {
+                throw new ErreurImport("Port invalide : il doit être compris entre 1 et 65535.");
+            }
+            return port;
+        } catch (NumberFormatException e) {
+            throw new ErreurImport("Port invalide : valeur numérique attendue.");
+        }
+    }
+
+    private static Configuration creer(TypeConnexion type, String nom,
+                                       HotePort adresse, String lien) {
+        String nomFinal = (nom == null || nom.trim().isEmpty())
+                ? adresse.hote + ":" + adresse.port
+                : nom.trim();
+        return new Configuration(UUID.randomUUID().toString(), nomFinal, type,
+                adresse.hote, adresse.port, lien);
+    }
+
+    private static String decoder(String texte) {
+        try {
+            return URLDecoder.decode(texte.replace("+", "%2B"), "UTF-8");
+        } catch (IllegalArgumentException | UnsupportedEncodingException e) {
+            return texte;
+        }
+    }
+
+    private static byte[] decoderBase64(String texte) throws ErreurImport {
+        StringBuilder sb = new StringBuilder();
+        for (char c : texte.toCharArray()) {
+            if (c == '-') {
+                sb.append('+');
+            } else if (c == '_') {
+                sb.append('/');
+            } else if (c != '=' && !Character.isWhitespace(c)) {
+                sb.append(c);
+            }
+        }
+        while (sb.length() % 4 != 0) {
+            sb.append('=');
+        }
+        try {
+            return Base64.decode(sb.toString(), Base64.DEFAULT);
+        } catch (IllegalArgumentException e) {
+            throw new ErreurImport("Contenu Base64 invalide.");
+        }
+    }
+}

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notif_connexion">Connexion en cours…</string>
+    <string name="notif_connecte">VPN connecté</string>
+    <string name="notif_deconnecte">VPN déconnecté</string>
+    <string name="notif_erreur">Erreur de connexion</string>
+    <string name="notif_bouton_deconnecter">Déconnecter</string>
+    <string name="canal_nom">Connexion VPN</string>
+    <string name="valeur_non_disponible">Non disponible</string>
+    <string name="note_stats">Les volumes correspondent aux octets échangés entre l\'application et le serveur VPN. La latence est mesurée par une requête réelle à travers le serveur.</string>
+    <string name="journal_titre">Journaux</string>
+    <string name="journal_actualiser">Actualiser</string>
+    <string name="journal_copier">Copier</string>
+    <string name="journal_effacer">Effacer</string>
+    <string name="journal_vide">Aucun événement pour le moment.</string>
+    <string name="journal_copies">Journaux copiés.</string>
+    <string name="vpn_autorisation_refusee">Autorisation VPN refusée.</string>
+</resources>

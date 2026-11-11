@@ -1,0 +1,384 @@
+package com.yiwalo.tunnel;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
+import android.provider.Settings;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+import com.yiwalo.tunnel.ip.AvionIp;
+import com.yiwalo.tunnel.ip.ChercheurIpLocal;
+import com.yiwalo.tunnel.ip.RechercheIpService;
+import java.util.List;
+public class ChercheurIpView extends LinearLayout {
+    private static final int FOND = 0xFF1B2230;
+    private static final int BORD = 0xFF2C3648;
+    private static final int TEXTE = 0xFFFFFFFF;
+    private static final int DISCRET = 0xFF9AA4B5;
+    private static final int BLEU = 0xFF3B82F6;
+    private static final int VERT = 0xFF22C55E;
+    private static final int ROUGE = 0xFFEF4444;
+    private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
+    private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+    private final Context ctx;
+    private TextView resume;
+    private TextView etat;
+    private LinearLayout listeIp;
+    private EditText essais;
+    private final Runnable rafraichir = new Runnable() {
+        @Override public void run() { majEcran(); }
+    };
+
+    static int dp(Context c, int v) {
+        return Math.round(v * c.getResources().getDisplayMetrics().density);
+    }
+    private int dp(int v) { return dp(ctx, v); }
+
+    static GradientDrawable fond(Context c, int couleur, int rayon, int bord) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(couleur);
+        g.setCornerRadius(dp(c, rayon));
+        if (bord != 0) g.setStroke(dp(c, 1), bord);
+        return g;
+    }
+
+    /** Tuile style « paramètres » : icône, titre, sous-titre, flèche. */
+    public static View tuile(Context c, String icone, String titre, String sous, final Runnable action) {
+        LinearLayout t = new LinearLayout(c);
+        t.setOrientation(HORIZONTAL);
+        t.setGravity(Gravity.CENTER_VERTICAL);
+        t.setPadding(dp(c, 14), dp(c, 14), dp(c, 14), dp(c, 14));
+        t.setBackground(fond(c, FOND, 16, BORD));
+        TextView i = new TextView(c);
+        i.setText(icone);
+        i.setTextSize(24f);
+        i.setGravity(Gravity.CENTER);
+        i.setBackground(fond(c, 0xFF243049, 14, 0));
+        i.setLayoutParams(new LinearLayout.LayoutParams(dp(c, 48), dp(c, 48)));
+        t.addView(i);
+        LinearLayout col = new LinearLayout(c);
+        col.setOrientation(VERTICAL);
+        LinearLayout.LayoutParams pc = new LinearLayout.LayoutParams(0, WRAP, 1f);
+        pc.leftMargin = dp(c, 14);
+        col.setLayoutParams(pc);
+        TextView a = new TextView(c);
+        a.setText(titre);
+        a.setTextColor(TEXTE);
+        a.setTextSize(16f);
+        a.setTypeface(null, Typeface.BOLD);
+        TextView b = new TextView(c);
+        b.setText(sous);
+        b.setTextColor(DISCRET);
+        b.setTextSize(13f);
+        col.addView(a);
+        col.addView(b);
+        t.addView(col);
+        TextView f = new TextView(c);
+        f.setText("›");
+        f.setTextColor(DISCRET);
+        f.setTextSize(26f);
+        t.addView(f);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
+        p.topMargin = dp(c, 8);
+        t.setLayoutParams(p);
+        t.setClickable(true);
+        t.setOnClickListener(v -> action.run());
+        return t;
+    }
+
+    public ChercheurIpView(final Context ctx, final Runnable retour) {
+        super(ctx);
+        this.ctx = ctx;
+        setOrientation(VERTICAL);
+        setPadding(dp(16), dp(20), dp(16), dp(32));
+
+        LinearLayout entete = new LinearLayout(ctx);
+        entete.setOrientation(HORIZONTAL);
+        entete.setGravity(Gravity.CENTER_VERTICAL);
+        TextView fleche = texte("←", 26f, TEXTE, true);
+        fleche.setPadding(dp(4), dp(4), dp(16), dp(4));
+        fleche.setOnClickListener(v -> retour.run());
+        entete.addView(fleche);
+        entete.addView(texte("📡  IP checker", 22f, TEXTE, true));
+        addView(entete);
+
+        LinearLayout c1 = carte();
+        c1.addView(texte("Adresses voulues", 16f, TEXTE, true));
+        resume = texte("", 14f, DISCRET, false);
+        resume.setPadding(0, dp(6), 0, dp(12));
+        c1.addView(resume);
+        c1.addView(bouton("Coller / modifier la liste", BLEU, this::editerListe));
+        addView(c1);
+
+        LinearLayout c2 = carte();
+        LinearLayout ligne = new LinearLayout(ctx);
+        ligne.setOrientation(HORIZONTAL);
+        ligne.setGravity(Gravity.CENTER_VERTICAL);
+        TextView lib = texte("Essais maximum", 14f, TEXTE, false);
+        lib.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP, 1f));
+        ligne.addView(lib);
+        essais = new EditText(ctx);
+        essais.setText(String.valueOf(ChercheurIpLocal.essaisSauve(ctx)));
+        essais.setInputType(InputType.TYPE_CLASS_NUMBER);
+        essais.setTextColor(TEXTE);
+        essais.setGravity(Gravity.CENTER);
+        essais.setBackground(fond(ctx, 0xFF243049, 10, 0));
+        essais.setLayoutParams(new LinearLayout.LayoutParams(dp(90), WRAP));
+        ligne.addView(essais);
+        c2.addView(ligne);
+
+        LinearLayout boutons = new LinearLayout(ctx);
+        boutons.setOrientation(HORIZONTAL);
+        LinearLayout.LayoutParams pb = new LinearLayout.LayoutParams(MATCH, WRAP);
+        pb.topMargin = dp(14);
+        boutons.setLayoutParams(pb);
+        TextView bl = bouton("▶  Lancer", VERT, this::lancer);
+        LinearLayout.LayoutParams p1 = new LinearLayout.LayoutParams(0, WRAP, 1f);
+        p1.rightMargin = dp(6);
+        bl.setLayoutParams(p1);
+        TextView ba = bouton("■  Arrêter", ROUGE, this::arreter);
+        LinearLayout.LayoutParams p2 = new LinearLayout.LayoutParams(0, WRAP, 1f);
+        p2.leftMargin = dp(6);
+        ba.setLayoutParams(p2);
+        boutons.addView(bl);
+        boutons.addView(ba);
+        c2.addView(boutons);
+        etat = texte("", 14f, DISCRET, false);
+        etat.setPadding(dp(4), dp(14), dp(4), 0);
+        c2.addView(etat);
+        addView(c2);
+
+        TextView t3 = texte("Adresses obtenues", 16f, TEXTE, true);
+        t3.setPadding(dp(4), dp(22), 0, dp(4));
+        addView(t3);
+        listeIp = new LinearLayout(ctx);
+        listeIp.setOrientation(VERTICAL);
+        addView(listeIp);
+        majEcran();
+    }
+
+    @Override protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        ChercheurIpLocal.observateur = rafraichir;
+        majEcran();
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        if (ChercheurIpLocal.observateur == rafraichir) ChercheurIpLocal.observateur = null;
+        super.onDetachedFromWindow();
+    }
+
+    private TextView texte(String s, float taille, int couleur, boolean gras) {
+        TextView t = new TextView(ctx);
+        t.setText(s);
+        t.setTextSize(taille);
+        t.setTextColor(couleur);
+        if (gras) t.setTypeface(null, Typeface.BOLD);
+        return t;
+    }
+
+    private LinearLayout carte() {
+        LinearLayout c = new LinearLayout(ctx);
+        c.setOrientation(VERTICAL);
+        c.setPadding(dp(16), dp(16), dp(16), dp(16));
+        c.setBackground(fond(ctx, FOND, 16, BORD));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
+        p.topMargin = dp(14);
+        c.setLayoutParams(p);
+        return c;
+    }
+
+    private TextView bouton(String s, int couleur, final Runnable action) {
+        TextView b = texte(s, 15f, TEXTE, true);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(dp(12), dp(14), dp(12), dp(14));
+        b.setBackground(fond(ctx, couleur, 14, 0));
+        b.setClickable(true);
+        b.setOnClickListener(v -> action.run());
+        return b;
+    }
+
+    private void majEcran() {
+        List<String> l = ChercheurIpLocal.cibles(ChercheurIpLocal.texteSauve(ctx));
+        if (l.isEmpty()) {
+            resume.setText("Aucune adresse enregistrée. Touche le bouton pour coller ta liste.");
+        } else {
+            StringBuilder sb = new StringBuilder();
+            sb.append(l.size()).append(l.size() > 1 ? " adresses enregistrées" : " adresse enregistrée");
+            sb.append("  ·  ").append(l.get(0));
+            if (l.size() > 1) sb.append(", ").append(l.get(1));
+            if (l.size() > 2) sb.append("…");
+            resume.setText(sb.toString());
+        }
+        String e = ChercheurIpLocal.texteEtat;
+        etat.setText(e);
+        etat.setTextColor(e.startsWith("IP voulue") ? VERT
+                : (ChercheurIpLocal.enCours() ? BLEU : DISCRET));
+        listeIp.removeAllViews();
+        if (ChercheurIpLocal.historique.isEmpty()) {
+            listeIp.addView(texte("Rien pour l'instant.", 14f, DISCRET, false));
+            return;
+        }
+        int n = 0;
+        for (ChercheurIpLocal.Entree x : ChercheurIpLocal.historique) {
+            if (n++ >= 100) break;
+            listeIp.addView(ligneIp(x));
+        }
+
+        final String cle = "IP voulue trouvée : ";
+        if (e.startsWith(cle)) {
+            final String ipOk = e.substring(cle.length());
+            TextView ok = texte("✓  IP VOULUE TROUVÉE\n" + ipOk
+                    + "\nRecherche arrêtée · touche pour copier", 18f, 0xFFBBF7D0, true);
+            ok.setGravity(Gravity.CENTER);
+            ok.setPadding(dp(16), dp(22), dp(16), dp(22));
+            ok.setBackground(fond(ctx, 0xFF166534, 16, VERT));
+            LinearLayout.LayoutParams po = new LinearLayout.LayoutParams(MATCH, WRAP);
+            po.topMargin = dp(14);
+            ok.setLayoutParams(po);
+            ok.setOnClickListener(v -> {
+                ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("IP", ipOk));
+                Toast.makeText(ctx, "IP copiée", Toast.LENGTH_SHORT).show();
+            });
+            listeIp.addView(ok);
+        }
+    }
+
+    private View ligneIp(ChercheurIpLocal.Entree x) {
+        TextView t = texte((x.voulue ? "✓  " : "•  ") + x.ip + (x.voulue ? "   IP VOULUE" : ""),
+                16f, x.voulue ? 0xFFBBF7D0 : TEXTE, x.voulue);
+        t.setPadding(dp(14), dp(12), dp(14), dp(12));
+        t.setBackground(x.voulue ? fond(ctx, 0xFF14532D, 12, VERT) : fond(ctx, FOND, 12, BORD));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
+        p.topMargin = dp(6);
+        t.setLayoutParams(p);
+        return t;
+    }
+
+    private void editerListe() {
+        final EditText champ = new EditText(ctx);
+        champ.setText(ChercheurIpLocal.texteSauve(ctx));
+        champ.setHint("Une adresse par ligne\n10.45.  (préfixe)\n100.72.13.8  (exacte)");
+        champ.setMinLines(6);
+        champ.setMaxLines(12);
+        champ.setGravity(Gravity.TOP | Gravity.START);
+        champ.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        LinearLayout box = new LinearLayout(ctx);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        box.addView(champ, new LinearLayout.LayoutParams(MATCH, WRAP));
+        final AlertDialog d = new AlertDialog.Builder(ctx, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Adresses voulues")
+                .setView(box)
+                .setPositiveButton("Enregistrer", (x, y) -> {
+                    ChercheurIpLocal.sauver(ctx, champ.getText().toString());
+                    majEcran();
+                })
+                .setNegativeButton("Vider", null)
+                .setNeutralButton("Coller", null)
+                .create();
+        d.setOnShowListener(x -> {
+            d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+                ClipData cd = cm == null ? null : cm.getPrimaryClip();
+                if (cd == null || cd.getItemCount() == 0) {
+                    Toast.makeText(ctx, "Presse-papiers vide", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                CharSequence t = cd.getItemAt(0).coerceToText(ctx);
+                String actuel = champ.getText().toString();
+                champ.setText(actuel.isEmpty() ? t : actuel + "\n" + t);
+            });
+            d.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> champ.setText(""));
+        });
+        try {
+            d.show();
+        } catch (RuntimeException e) {
+            Toast.makeText(ctx, "Impossible d'ouvrir l'éditeur", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void lancer() {
+        List<String> l = ChercheurIpLocal.cibles(ChercheurIpLocal.texteSauve(ctx));
+        if (l.isEmpty()) {
+            Toast.makeText(ctx, "Colle d'abord ta liste d'adresses", Toast.LENGTH_SHORT).show();
+            editerListe();
+            return;
+        }
+        if (ChercheurIpLocal.enCours()) {
+            Toast.makeText(ctx, "Recherche déjà en cours", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int max = 50;
+        try {
+            max = Math.max(1, Integer.parseInt(essais.getText().toString().trim()));
+        } catch (NumberFormatException ignore) {
+            // valeur par defaut
+        }
+        ChercheurIpLocal.sauverEssais(ctx, max);
+        if (!AvionIp.automatiquePossible(ctx)) {
+            demanderMethode();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 33 && ctx instanceof Activity
+                && ctx.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                != PackageManager.PERMISSION_GRANTED) {
+            ((Activity) ctx).requestPermissions(
+                    new String[]{"android.permission.POST_NOTIFICATIONS"}, 4242);
+        }
+        try {
+            ctx.startForegroundService(new Intent(ctx, RechercheIpService.class).putExtra("max", max));
+        } catch (RuntimeException e) {
+            Toast.makeText(ctx, "Impossible de démarrer : " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void arreter() {
+        ChercheurIpLocal.arreter();
+        try {
+            ctx.startService(new Intent(ctx, RechercheIpService.class)
+                    .setAction(RechercheIpService.ACTION_STOP));
+        } catch (RuntimeException ignore) {
+            // service deja arrete
+        }
+        Toast.makeText(ctx, "Arrêté. Vérifie que le mode avion est coupé.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void ouvrirReglage(String action) {
+        try {
+            ctx.startActivity(new Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException e) {
+            Toast.makeText(ctx, "Réglage indisponible sur ce téléphone", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void demanderMethode() {
+        try {
+            new AlertDialog.Builder(ctx, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle("Activer le mode avion automatique")
+                    .setMessage("Pour couper et remettre le réseau tout seul, choisis cette appli comme "
+                            + "« Appli d'assistant numérique » par défaut. Si ton téléphone ne la propose "
+                            + "pas, active son service d'accessibilité. Puis reviens et appuie sur Lancer.")
+                    .setPositiveButton("Choisir l'assistant",
+                            (x, y) -> ouvrirReglage(Settings.ACTION_VOICE_INPUT_SETTINGS))
+                    .setNegativeButton("Accessibilité",
+                            (x, y) -> ouvrirReglage(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    .setNeutralButton("Annuler", null)
+                    .show();
+        } catch (RuntimeException e) {
+            ouvrirReglage(Settings.ACTION_VOICE_INPUT_SETTINGS);
+        }
+    }
+}

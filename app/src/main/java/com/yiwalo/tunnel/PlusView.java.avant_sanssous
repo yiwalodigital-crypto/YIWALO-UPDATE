@@ -1,0 +1,104 @@
+package com.yiwalo.tunnel;
+
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+import com.yiwalo.tunnel.ip.ChercheurIpLocal;
+
+public class PlusView extends ScrollView {
+    private final Context ctx;
+    private final LinearLayout menu;
+
+    public PlusView(final Context ctx) {
+        super(ctx);
+        this.ctx = ctx;
+        ctx.getSharedPreferences("yiwalo_reglages", Context.MODE_PRIVATE)
+                .edit().remove("reconnexion_auto").apply();
+        menu = new LinearLayout(ctx);
+        menu.setOrientation(LinearLayout.VERTICAL);
+        menu.setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 22), Ui.dp(ctx, 18), Ui.dp(ctx, 32));
+        addView(menu, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        construire();
+    }
+
+    private void page(View v) {
+        removeAllViews();
+        addView(v, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        scrollTo(0, 0);
+    }
+
+    private void retourMenu() {
+        removeAllViews();
+        construire();
+        addView(menu, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        scrollTo(0, 0);
+    }
+
+    private void naviguer(int onglet) {
+        if (ctx instanceof MainActivity) ((MainActivity) ctx).afficher(onglet);
+    }
+
+    private void copier(String libelle, String valeur, String message) {
+        ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText(libelle, valeur));
+        Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show();
+    }
+
+    private void construire() {
+        menu.removeAllViews();
+        final Runnable retour = this::retourMenu;
+        menu.addView(Ui.texte(ctx, "Paramètres", 28f, Ui.TEXTE, true));
+
+
+        menu.addView(Ui.section(ctx, "NAVIGATION"));
+        LinearLayout nav = Ui.carte(ctx);
+        nav.addView(Ui.rangee(ctx, R.drawable.ic_configurations, Ui.BLEU, "Profils",
+                "Tes configurations de connexion", () -> naviguer(1)));
+        nav.addView(Ui.separateur(ctx));
+        nav.addView(Ui.rangee(ctx, R.drawable.ic_abonnements, Ui.VIOLET, "Abonnements",
+                "Gérer tes abonnements", () -> naviguer(2)));
+        menu.addView(nav);
+
+        menu.addView(Ui.section(ctx, "OUTILS"));
+        LinearLayout outils = Ui.carte(ctx);
+        outils.addView(Ui.rangee(ctx, R.drawable.ic_signal, Ui.VERT, "IP checker",
+                "Cherche une IP précise via le mode avion",
+                () -> page(new ChercheurIpView(ctx, retour))));
+        outils.addView(Ui.separateur(ctx));
+        outils.addView(Ui.rangee(ctx, R.drawable.ic_donnees, Ui.BLEU, "Consommation des données",
+                "Débit et volumes en temps réel",
+                () -> page(new ConsommationView(ctx, retour))));
+        outils.addView(Ui.separateur(ctx));
+        outils.addView(Ui.rangee(ctx, R.drawable.ic_ping, Ui.ORANGE, "Ping et débit",
+                "Latence vers un serveur, test de débit",
+                () -> page(new PingView(ctx, retour))));
+        outils.addView(Ui.separateur(ctx));
+        String id;
+        try {
+            id = PartageConfig.idAppareil(ctx);
+        } catch (RuntimeException e) {
+            id = "indisponible";
+        }
+        final String idF = id;
+        outils.addView(Ui.rangee(ctx, R.drawable.ic_cle, Ui.ROSE, "ID de l’appareil", idF,
+                R.drawable.ic_copier, () -> copier("ID appareil", idF, "ID copié")));
+        outils.addView(Ui.separateur(ctx));
+        outils.addView(Ui.rangee(ctx, R.drawable.ic_partager, Ui.VERT, "Partager l’application",
+                "Envoie l’APK par Bluetooth, Xender, WhatsApp…",
+                () -> PartageApk.partager(ctx)));
+        outils.addView(Ui.separateur(ctx));
+        outils.addView(Ui.rangee(ctx, R.drawable.ic_info, Ui.DISCRET, "À propos",
+                "Version, appareil, contact",
+                () -> page(new AProposView(ctx, retour))));
+        menu.addView(outils);
+    }
+}

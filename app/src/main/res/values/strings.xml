@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">YIWALO TUNNEL</string>
+    <string name="onglet_accueil">Accueil</string>
+    <string name="onglet_configurations">Configurations</string>
+    <string name="onglet_abonnements">Abonnements</string>
+    <string name="onglet_journaux">Journaux</string>
+    <string name="onglet_plus">Paramètres</string>
+    <string name="section_en_cours">Section en cours de développement</string>
+    <string name="etat_deconnecte">DÉCONNECTÉ</string>
+    <string name="etat_preparation">PRÉPARATION</string>
+    <string name="etat_connexion">CONNEXION EN COURS</string>
+    <string name="etat_connecte">CONNECTÉ</string>
+    <string name="etat_reconnexion">RECONNEXION</string>
+    <string name="etat_erreur">ERREUR DE CONNEXION</string>
+    <string name="bouton_connexion">Bouton de connexion</string>
+    <string name="msg_aucune_config">Aucune configuration sélectionnée. Ajoutez-en une dans l\'onglet Configurations.</string>
+    <string name="carte_titre">Configuration active</string>
+    <string name="carte_aucune">Aucune configuration sélectionnée</string>
+    <string name="champ_nom">Nom</string>
+    <string name="champ_type">Type de connexion</string>
+    <string name="champ_serveur">Serveur distant</string>
+    <string name="champ_port">Port</string>
+    <string name="champ_latence">Latence</string>
+    <string name="champ_recu">Données reçues</string>
+    <string name="champ_envoye">Données envoyées</string>
+    <string name="champ_duree">Durée de connexion</string>
+    <string name="valeur_inconnue">—</string>
+    <string name="valeur_non_mesuree">Non mesurée</string>
+</resources>

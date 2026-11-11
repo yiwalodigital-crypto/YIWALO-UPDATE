@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="carte_selectionnee">Configuration sélectionnée</string>
+    <string name="msg_moteur_absent">Le moteur VPN n\'est pas encore intégré : la connexion n\'est pas disponible.</string>
+    <string name="cfg_ajouter_desc">Ajouter une configuration</string>
+    <string name="cfg_menu_presse_papiers">Importer depuis le presse-papiers</string>
+    <string name="cfg_menu_coller">Coller une configuration</string>
+    <string name="cfg_vide">Aucune configuration.\n\n1. Copiez votre lien (vless://, vmess://, trojan:// ou ss://)\n2. Touchez + puis « Importer depuis le presse-papiers »</string>
+    <string name="cfg_active">Active</string>
+    <string name="cfg_supprimer">Supprimer</string>
+    <string name="cfg_confirmer_supprimer">Supprimer la configuration « %1$s » ?</string>
+    <string name="cfg_annuler">Annuler</string>
+    <string name="cfg_importer">Importer</string>
+    <string name="cfg_coller_titre">Coller une configuration</string>
+    <string name="cfg_coller_indice">vless://, vmess://, trojan:// ou ss://</string>
+    <string name="cfg_presse_vide">Le presse-papiers est vide. Copiez d’abord votre lien de configuration, puis touchez +.</string>
+    <string name="cfg_resultat_titre">Résultat de l\'importation</string>
+    <string name="cfg_ajoutees">%1$d configuration(s) ajoutée(s).</string>
+    <string name="cfg_doublons">%1$d déjà présente(s).</string>
+    <string name="cfg_erreurs">Erreurs :</string>
+    <string name="cfg_ok">OK</string>
+</resources>

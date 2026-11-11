@@ -1,0 +1,726 @@
+package com.yiwalo.tunnel;
+
+import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
+import android.content.Context;
+import android.content.res.ColorStateList;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.net.TrafficStats;
+import android.os.Process;
+import android.os.SystemClock;
+import android.text.TextUtils;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.yiwalo.tunnel.config.Configuration;
+
+import java.util.Locale;
+
+public class AccueilView extends LinearLayout {
+
+    public interface Actions {
+        void connecter();
+
+        void deconnecter();
+
+        // Appelé quand on touche le bouton de configuration
+        default void choisirConfiguration() {
+        }
+    }
+
+    private final Configuration active;
+    private final Actions actions;
+    private final ImageView bouton;
+    private final TextView texteEtat;
+    private final TextView texteMessage;
+    private final TextView texteExpiration;
+    private boolean expireAffiche = false;
+    private final GradientDrawable fondBouton = new GradientDrawable();
+    private TextView valIp;
+    private LinearLayout carteConfig;
+    private TextView valConfig;
+    private TextView valType;
+    private GradientDrawable pastilleFond;
+    private TextView valDuree;
+    private TextView valRecu;
+    private TextView valEnvoye;
+    private TextView valDebitRecu;
+    private TextView valDebitEnvoye;
+    private ObjectAnimator pulsation;
+    private String messageLocal = "";
+    private long dernierRx = -1;
+    private long dernierTx = -1;
+    private long dernierTemps = 0;
+    private double debitRecu = 0;
+    private double debitEnvoye = 0;
+
+    private final Runnable ecouteur = this::rafraichir;
+    private final Runnable tic = new Runnable() {
+        @Override
+        public void run() {
+            rafraichir();
+            postDelayed(this, 1000);
+        }
+    };
+
+    public AccueilView(Context contexte, Configuration active, Actions actions) {
+        super(contexte);
+        this.active = active;
+        this.actions = actions;
+        setOrientation(VERTICAL);
+        setGravity(Gravity.CENTER_HORIZONTAL);
+        setPadding(dp(16), dp(12), dp(16), dp(12));
+
+        int cote = Math.max(dp(100), Math.min(dp(160),
+                Math.round(getResources().getDisplayMetrics().heightPixels * 0.19f)));
+        int marge = Math.round(cote * 0.28f);
+
+        bouton = new ImageView(contexte);
+        bouton.setImageResource(R.drawable.ic_power);
+        bouton.setPadding(marge, marge, marge, marge);
+        bouton.setContentDescription(contexte.getString(R.string.bouton_connexion));
+        fondBouton.setShape(GradientDrawable.OVAL);
+        fondBouton.setColor(contexte.getColor(R.color.carte));
+        bouton.setBackground(fondBouton);
+        LinearLayout.LayoutParams pBouton = new LinearLayout.LayoutParams(cote, cote);
+        pBouton.topMargin = dp(8);
+        pBouton.bottomMargin = dp(16);
+        addView(bouton, pBouton);
+
+        texteEtat = new TextView(contexte);
+        texteEtat.setTextSize(18f);
+        texteEtat.setGravity(Gravity.CENTER);
+        texteEtat.setTypeface(texteEtat.getTypeface(), Typeface.BOLD);
+        addView(texteEtat);
+
+        texteMessage = new TextView(contexte);
+        texteMessage.setTextSize(12f);
+        texteMessage.setGravity(Gravity.CENTER);
+        texteMessage.setTextColor(contexte.getColor(R.color.texte_discret));
+        texteMessage.setPadding(dp(12), dp(6), dp(12), dp(6));
+        addView(texteMessage);
+
+        texteExpiration = new TextView(contexte);
+        texteExpiration.setTextSize(11f);
+        texteExpiration.setGravity(Gravity.CENTER);
+        texteExpiration.setTypeface(texteExpiration.getTypeface(), Typeface.BOLD);
+        texteExpiration.setPadding(dp(14), dp(6), dp(14), dp(6));
+        texteExpiration.setVisibility(View.GONE);
+        LinearLayout.LayoutParams pExp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pExp.topMargin = dp(4);
+        addView(texteExpiration, pExp);
+
+        View vide = new View(contexte);
+        addView(vide, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        // ---- Bouton de configuration active ----
+        carteConfig = new LinearLayout(contexte);
+        carteConfig.setOrientation(HORIZONTAL);
+        carteConfig.setGravity(Gravity.CENTER_VERTICAL);
+        carteConfig.setPadding(dp(16), dp(12), dp(14), dp(12));
+        int cyan = contexte.getColor(R.color.cyan);
+        GradientDrawable fondConfig = new GradientDrawable();
+        fondConfig.setColor(contexte.getColor(R.color.carte));
+        fondConfig.setCornerRadius(dp(16));
+        fondConfig.setStroke(dp(1), (cyan & 0x00FFFFFF) | 0x55000000);
+        GradientDrawable masque = new GradientDrawable();
+        masque.setColor(0xFFFFFFFF);
+        masque.setCornerRadius(dp(16));
+        carteConfig.setBackground(new RippleDrawable(
+                ColorStateList.valueOf(0x33FFFFFF), fondConfig, masque));
+        carteConfig.setClickable(true);
+        carteConfig.setFocusable(true);
+        carteConfig.setOnClickListener(v -> surClicConfig());
+
+        pastilleFond = new GradientDrawable();
+        pastilleFond.setShape(GradientDrawable.OVAL);
+        pastilleFond.setColor(contexte.getColor(R.color.texte_discret));
+        View pastille = new View(contexte);
+        pastille.setBackground(pastilleFond);
+        LinearLayout.LayoutParams pPastille = new LinearLayout.LayoutParams(dp(10), dp(10));
+        pPastille.rightMargin = dp(12);
+        carteConfig.addView(pastille, pPastille);
+
+        LinearLayout colonneConfig = new LinearLayout(contexte);
+        colonneConfig.setOrientation(VERTICAL);
+
+        TextView libConfig = new TextView(contexte);
+        libConfig.setText("CONFIGURATION ACTIVE");
+        libConfig.setTextSize(9f);
+        libConfig.setLetterSpacing(0.12f);
+        libConfig.setTypeface(libConfig.getTypeface(), Typeface.BOLD);
+        libConfig.setTextColor(contexte.getColor(R.color.texte_discret));
+        colonneConfig.addView(libConfig);
+
+        valConfig = new TextView(contexte);
+        valConfig.setTextSize(14f);
+        valConfig.setTypeface(valConfig.getTypeface(), Typeface.BOLD);
+        valConfig.setGravity(Gravity.START);
+        valConfig.setSingleLine(true);
+        valConfig.setEllipsize(TextUtils.TruncateAt.END);
+        valConfig.setPadding(0, dp(2), 0, 0);
+        colonneConfig.addView(valConfig);
+
+        carteConfig.addView(colonneConfig, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        valType = new TextView(contexte);
+        valType.setTextSize(10f);
+        valType.setLetterSpacing(0.08f);
+        valType.setTypeface(valType.getTypeface(), Typeface.BOLD);
+        valType.setPadding(dp(10), dp(4), dp(10), dp(4));
+        LinearLayout.LayoutParams pType = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pType.leftMargin = dp(10);
+        carteConfig.addView(valType, pType);
+
+        Chevrons fleche = new Chevrons(contexte, 2, 1,
+                contexte.getColor(R.color.bleu_clair), dp(2));
+        LinearLayout.LayoutParams pFleche = new LinearLayout.LayoutParams(dp(18), dp(18));
+        pFleche.leftMargin = dp(8);
+        carteConfig.addView(fleche, pFleche);
+
+        LinearLayout.LayoutParams pCarte = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pCarte.bottomMargin = dp(10);
+        addView(carteConfig, pCarte);
+
+        addView(creerTableau(contexte), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        bouton.setOnClickListener(v -> surClic());
+        rafraichir();
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        SuiviVpn.ajouterEcouteur(ecouteur);
+        post(tic);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        SuiviVpn.retirerEcouteur(ecouteur);
+        removeCallbacks(tic);
+        animer(false);
+        super.onDetachedFromWindow();
+    }
+
+    private void surClicConfig() {
+        EtatVpn etat = SuiviVpn.etat();
+        if (etat == EtatVpn.DECONNECTE || etat == EtatVpn.ERREUR) {
+            actions.choisirConfiguration();
+        } else {
+            T.toast(getContext(),
+                    "Déconnectez-vous pour changer de configuration.",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void surClic() {
+        EtatVpn etat = SuiviVpn.etat();
+        if (etat == EtatVpn.DECONNECTE || etat == EtatVpn.ERREUR) {
+            if (active == null) {
+                messageLocal = getContext().getString(R.string.acc_import_invite);
+                rafraichir();
+            } else if (PartageConfig.expiree(active)) {
+                messageLocal = "";
+                expireAffiche = true;
+                rafraichir();
+            } else {
+                messageLocal = "";
+                actions.connecter();
+            }
+        } else {
+            actions.deconnecter();
+        }
+    }
+
+    private void rafraichir() {
+        Context contexte = getContext();
+        EtatVpn etat = SuiviVpn.etat();
+        int couleur;
+        switch (etat) {
+            case CONNECTE:
+                couleur = contexte.getColor(R.color.vert);
+                break;
+            case ERREUR:
+                couleur = contexte.getColor(R.color.rouge);
+                break;
+            case DECONNECTE:
+                couleur = contexte.getColor(R.color.texte_discret);
+                break;
+            default:
+                couleur = contexte.getColor(R.color.bleu);
+                break;
+        }
+        final boolean expire = (expireAffiche || etat == EtatVpn.ERREUR) && active != null && PartageConfig.expiree(active)
+                && (etat == EtatVpn.DECONNECTE || etat == EtatVpn.ERREUR);
+        if (expire) {
+            couleur = contexte.getColor(R.color.rouge);
+        }
+        fondBouton.setStroke(dp(4), couleur);
+        bouton.setColorFilter(couleur);
+        if (etat == EtatVpn.PREPARATION || etat == EtatVpn.CONNEXION
+                || etat == EtatVpn.RECONNEXION) {
+            texteEtat.setText(T.t("CONNEXION…"));
+        } else {
+            texteEtat.setText(contexte.getString(etat.libelle));
+        }
+        texteEtat.setTextColor(couleur);
+        if (expire) {
+            texteEtat.setText(T.t("EXPIRÉ"));
+        } else if (etat == EtatVpn.ERREUR) {
+            texteEtat.setText(T.t("NON CONNECTÉ"));
+        }
+        animer(etat == EtatVpn.PREPARATION || etat == EtatVpn.CONNEXION
+                || etat == EtatVpn.RECONNEXION);
+
+        if (etat != EtatVpn.DECONNECTE && etat != EtatVpn.ERREUR) {
+            messageLocal = "";
+            expireAffiche = false;
+        }
+        boolean enCours = etat == EtatVpn.PREPARATION || etat == EtatVpn.CONNEXION
+                || etat == EtatVpn.RECONNEXION;
+        String message = enCours ? "" : SuiviVpn.message();
+        String defaut = "";
+        if (etat == EtatVpn.DECONNECTE) {
+            defaut = contexte.getString(active == null
+                    ? R.string.acc_import_invite : R.string.acc_pret);
+        } else if (enCours) {
+            defaut = T.t("Connexion en cours…");
+        }
+        texteMessage.setText(!message.isEmpty() ? message
+                : (!messageLocal.isEmpty() ? messageLocal : defaut));
+        if (expire) {
+            texteMessage.setText("Cette configuration a expiré le "
+                    + PartageConfig.formater(active.expireLe)
+                    + ".\nContactez votre fournisseur pour la renouveler.");
+        }
+        majExpiration(contexte);
+
+        String tiret = contexte.getString(R.string.valeur_inconnue);
+        if (valType != null) {
+            if (active != null && active.type != null) {
+                valType.setText(libelleType(active));
+                int couleurT = couleurType(contexte, active);
+                GradientDrawable fondType = new GradientDrawable();
+                fondType.setCornerRadius(dp(20));
+                fondType.setColor((couleurT & 0x00FFFFFF) | 0x33000000);
+                valType.setBackground(fondType);
+                valType.setTextColor(couleurT);
+                valType.setVisibility(View.VISIBLE);
+            } else {
+                valType.setVisibility(View.GONE);
+            }
+        }
+        if (valConfig != null) {
+            boolean aConfig = active != null && active.nom != null
+                    && !active.nom.trim().isEmpty();
+            valConfig.setText(aConfig ? active.nom.trim() : "Choisir une configuration");
+            valConfig.setTextColor(contexte.getColor(
+                    aConfig ? R.color.texte : R.color.texte_discret));
+            pastilleFond.setColor(contexte.getColor(
+                    SuiviVpn.etat() == EtatVpn.CONNECTE ? R.color.vert : R.color.texte_discret));
+        }
+        String ip = ReseauLocal.ipLocale(contexte);
+        {
+            String nomRes = nomReseauDonnees(contexte);
+            String ipTxt = ip != null ? ip : contexte.getString(R.string.valeur_non_disponible);
+            android.text.SpannableString sp = new android.text.SpannableString(nomRes + "      " + ipTxt);
+            sp.setSpan(new android.text.style.ForegroundColorSpan(0xFF22D3EE),
+                    0, nomRes.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sp.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                    0, nomRes.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sp.setSpan(new android.text.style.ForegroundColorSpan(0xFF4ADE80),
+                    nomRes.length() + 6, sp.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            valIp.setText(sp);
+        }
+
+        if (etat == EtatVpn.CONNECTE) {
+            int uid = Process.myUid();
+            long rx = TrafficStats.getUidRxBytes(uid);
+            long tx = TrafficStats.getUidTxBytes(uid);
+            valRecu.setText(octets(SuiviVpn.totalRx(), 0));
+            valEnvoye.setText(octets(SuiviVpn.totalTx(), 0));
+
+            long maintenant = SystemClock.elapsedRealtime();
+            if (rx != TrafficStats.UNSUPPORTED && tx != TrafficStats.UNSUPPORTED) {
+                if (dernierTemps == 0) {
+                    dernierRx = rx;
+                    dernierTx = tx;
+                    dernierTemps = maintenant;
+                } else if (maintenant - dernierTemps >= 800) {
+                    double secondes = (maintenant - dernierTemps) / 1000.0;
+                    debitRecu = Math.max(0, rx - dernierRx) / secondes;
+                    debitEnvoye = Math.max(0, tx - dernierTx) / secondes;
+                    dernierRx = rx;
+                    dernierTx = tx;
+                    dernierTemps = maintenant;
+                }
+                valDebitRecu.setText(debit(debitRecu));
+                valDebitEnvoye.setText(debit(debitEnvoye));
+            } else {
+                String nd = contexte.getString(R.string.valeur_non_disponible);
+                valDebitRecu.setText(nd);
+                valDebitEnvoye.setText(nd);
+            }
+            long s = Math.max(0, SuiviVpn.dureeMs() / 1000);
+            valDuree.setText(String.format(Locale.FRANCE, "%02d:%02d:%02d",
+                    s / 3600, (s % 3600) / 60, s % 60));
+        } else {
+            dernierTemps = 0;
+            debitRecu = 0;
+            debitEnvoye = 0;
+            if (SuiviVpn.totalRx() > 0 || SuiviVpn.totalTx() > 0) {
+                valRecu.setText(octets(SuiviVpn.totalRx(), 0));
+                valEnvoye.setText(octets(SuiviVpn.totalTx(), 0));
+            } else {
+                valRecu.setText(tiret);
+                valEnvoye.setText(tiret);
+            }
+            valDebitRecu.setText(tiret);
+            valDebitEnvoye.setText(tiret);
+            if (SuiviVpn.dureeMs() > 0) {
+                long f = SuiviVpn.dureeMs() / 1000;
+                valDuree.setText(String.format(Locale.FRANCE, "%02d:%02d:%02d",
+                        f / 3600, (f % 3600) / 60, f % 60));
+            } else {
+                valDuree.setText(tiret);
+            }
+        }
+    }
+
+    private String octets(long actuel, long base) {
+        if (actuel == TrafficStats.UNSUPPORTED || base < 0) {
+            return getContext().getString(R.string.valeur_non_disponible);
+        }
+        long n = Math.max(0, actuel - base);
+        if (n < 1024) {
+            return n + " o";
+        }
+        double v = n / 1024.0;
+        if (v < 1024) {
+            return String.format(Locale.FRANCE, "%.1f Ko", v);
+        }
+        v /= 1024.0;
+        if (v < 1024) {
+            return String.format(Locale.FRANCE, "%.1f Mo", v);
+        }
+        return String.format(Locale.FRANCE, "%.2f Go", v / 1024.0);
+    }
+
+    private String debit(double octetsParSeconde) {
+        if (octetsParSeconde < 1024) {
+            return String.format(Locale.FRANCE, "%.0f o/s", octetsParSeconde);
+        }
+        double v = octetsParSeconde / 1024.0;
+        if (v < 1024) {
+            return String.format(Locale.FRANCE, "%.1f Ko/s", v);
+        }
+        return String.format(Locale.FRANCE, "%.2f Mo/s", v / 1024.0);
+    }
+
+    private void animer(boolean actif) {
+        if (actif) {
+            if (pulsation == null) {
+                pulsation = ObjectAnimator.ofFloat(bouton, View.ALPHA, 1f, 0.35f);
+                pulsation.setDuration(800);
+                pulsation.setRepeatCount(ValueAnimator.INFINITE);
+                pulsation.setRepeatMode(ValueAnimator.REVERSE);
+            }
+            if (!pulsation.isRunning()) {
+                pulsation.start();
+            }
+        } else {
+            if (pulsation != null) {
+                pulsation.cancel();
+                pulsation = null;
+            }
+            bouton.setAlpha(1f);
+        }
+    }
+
+    private static String libelleType(Configuration cfg) {
+        String n = cfg.type.name().toUpperCase(java.util.Locale.ROOT);
+        if (n.contains("SLOW")) {
+            return "SlowDNS";
+        }
+        return n.replace('_', ' ');
+    }
+
+    private static int couleurType(Context ctx, Configuration cfg) {
+        String n = cfg.type.name().toUpperCase(java.util.Locale.ROOT);
+        if (n.contains("VMESS")) {
+            return ctx.getColor(R.color.violet_clair);
+        } else if (n.contains("VLESS")) {
+            return ctx.getColor(R.color.cyan);
+        } else if (n.contains("TROJAN")) {
+            return ctx.getColor(R.color.orange);
+        } else if (n.contains("SLOW")) {
+            return ctx.getColor(R.color.vert);
+        }
+        return ctx.getColor(R.color.bleu_clair);
+    }
+
+    private LinearLayout creerTableau(Context contexte) {
+        LinearLayout tableau = new LinearLayout(contexte);
+        tableau.setOrientation(VERTICAL);
+        tableau.setPadding(dp(4), dp(4), dp(4), dp(4));
+        GradientDrawable fond = new GradientDrawable();
+        fond.setColor(contexte.getColor(R.color.carte));
+        fond.setCornerRadius(dp(16));
+        tableau.setBackground(fond);
+
+        valIp = ajouterCellule(nouvelleLigne(tableau), R.string.champ_ip,
+                contexte.getColor(R.color.bleu_clair));
+
+        ((LinearLayout) valIp.getParent()).getChildAt(0).setVisibility(View.GONE);
+        valDuree = ajouterCellule(nouvelleLigne(tableau), R.string.champ_duree,
+                contexte.getColor(R.color.violet_clair));
+
+        cartesTransfert(tableau);
+        return tableau;
+    }
+
+    private LinearLayout nouvelleLigne(LinearLayout tableau) {
+        Context contexte = tableau.getContext();
+        if (tableau.getChildCount() > 0) {
+            View separateur = new View(contexte);
+            separateur.setBackgroundColor(contexte.getColor(R.color.fond));
+            tableau.addView(separateur, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        }
+        LinearLayout ligne = new LinearLayout(contexte);
+        ligne.setOrientation(HORIZONTAL);
+        tableau.addView(ligne, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return ligne;
+    }
+
+    private TextView ajouterCellule(LinearLayout ligne, int libelle, int couleur) {
+        Context contexte = ligne.getContext();
+        if (ligne.getChildCount() > 0) {
+            View separateur = new View(contexte);
+            separateur.setBackgroundColor(contexte.getColor(R.color.fond));
+            ligne.addView(separateur, new LinearLayout.LayoutParams(
+                    dp(1), ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        LinearLayout cellule = new LinearLayout(contexte);
+        cellule.setOrientation(VERTICAL);
+        cellule.setGravity(Gravity.CENTER);
+        cellule.setPadding(dp(6), dp(10), dp(6), dp(10));
+
+        TextView etiquette = new TextView(contexte);
+        etiquette.setText(libelle);
+        etiquette.setTextSize(10f);
+        etiquette.setTextColor(contexte.getColor(R.color.texte_discret));
+        etiquette.setGravity(Gravity.CENTER);
+        cellule.addView(etiquette);
+
+        TextView valeur = new TextView(contexte);
+        valeur.setTextSize(14f);
+        valeur.setTextColor(couleur);
+        valeur.setTypeface(valeur.getTypeface(), Typeface.BOLD);
+        valeur.setGravity(Gravity.CENTER);
+        valeur.setSingleLine(true);
+        valeur.setEllipsize(TextUtils.TruncateAt.END);
+        cellule.addView(valeur);
+
+        ligne.addView(cellule, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        return valeur;
+    }
+
+    private void majExpiration(Context contexte) {
+        if (active == null || active.expireLe <= 0) {
+            texteExpiration.setVisibility(View.GONE);
+            return;
+        }
+        long reste = active.expireLe - System.currentTimeMillis();
+        int couleur;
+        String texte;
+        if (reste <= 0) {
+            couleur = contexte.getColor(R.color.rouge);
+            texte = "●  Expirée le " + PartageConfig.formater(active.expireLe);
+        } else {
+            long j = reste / 86400000L;
+            long h = (reste % 86400000L) / 3600000L;
+            long m = (reste % 3600000L) / 60000L;
+            String duree = j > 0 ? j + " j " + h + " h"
+                    : (h > 0 ? h + " h " + m + " min" : Math.max(1, m) + " min");
+            couleur = j >= 3 ? contexte.getColor(R.color.vert) : contexte.getColor(R.color.orange);
+            texte = "●  Expire le " + PartageConfig.formater(active.expireLe)
+                    + "  ·  reste " + duree;
+        }
+        GradientDrawable fond = new GradientDrawable();
+        fond.setCornerRadius(dp(16));
+        fond.setColor((couleur & 0x00FFFFFF) | 0x26000000);
+        fond.setStroke(dp(1), couleur);
+        texteExpiration.setBackground(fond);
+        texteExpiration.setTextColor(couleur);
+        texteExpiration.setText(texte);
+        texteExpiration.setVisibility(View.VISIBLE);
+    }
+
+    private int dp(int valeur) {
+        return Math.round(valeur * getResources().getDisplayMetrics().density);
+    }
+
+    private static String nomReseauDonnees(Context ctx) {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                    ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            for (android.net.Network n : cm.getAllNetworks()) {
+                android.net.NetworkCapabilities nc = cm.getNetworkCapabilities(n);
+                if (nc != null
+                        && nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                        && !nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+                        && nc.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        && nc.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    return "Wi-Fi";
+                }
+            }
+            android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager)
+                    ctx.getSystemService(Context.TELEPHONY_SERVICE);
+            if (tm == null) {
+                return "Réseau mobile";
+            }
+            int id = android.telephony.SubscriptionManager.getDefaultDataSubscriptionId();
+            if (id != android.telephony.SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                tm = tm.createForSubscriptionId(id);
+            }
+            String op = tm.getNetworkOperatorName();
+            if (op == null || op.trim().isEmpty() || op.trim().matches("\\d+")) {
+                op = tm.getSimOperatorName();
+            }
+            if (op == null || op.trim().isEmpty() || op.trim().matches("\\d+")) {
+                String code = tm.getNetworkOperator();
+                if ("61301".equals(code)) return "Moov Africa BF";
+                if ("61302".equals(code)) return "Orange BF";
+                if ("61303".equals(code)) return "Telecel Faso";
+                return "Réseau mobile";
+            }
+            return op.trim();
+        } catch (RuntimeException ignore) {
+            return "Réseau mobile";
+        }
+    }
+
+    // ---- Cartes Reçu / Envoyé (style Npv Tunnel, unités Ko et Ko/s conservées) ----
+    private void cartesTransfert(LinearLayout tableau) {
+        Context c = tableau.getContext();
+        LinearLayout ligne = nouvelleLigne(tableau);
+        ligne.setPadding(dp(4), dp(12), dp(4), dp(12));
+        TextView[] r = carteTransfert(ligne, "Reçu", c.getColor(R.color.cyan), 0);
+        valRecu = r[0];
+        valDebitRecu = r[1];
+        TextView[] e = carteTransfert(ligne, "Envoyé", c.getColor(R.color.orange), 1);
+        valEnvoye = e[0];
+        valDebitEnvoye = e[1];
+    }
+
+    private TextView[] carteTransfert(LinearLayout ligne, String titre, int couleur, int sens) {
+        Context c = ligne.getContext();
+        if (ligne.getChildCount() > 0) {
+            View separateur = new View(c);
+            separateur.setBackgroundColor(c.getColor(R.color.fond));
+            LinearLayout.LayoutParams ps = new LinearLayout.LayoutParams(
+                    dp(1), ViewGroup.LayoutParams.MATCH_PARENT);
+            ps.setMargins(0, dp(4), 0, dp(4));
+            ligne.addView(separateur, ps);
+        }
+        LinearLayout carte = new LinearLayout(c);
+        carte.setOrientation(VERTICAL);
+        carte.setGravity(Gravity.CENTER);
+        carte.setPadding(dp(8), dp(4), dp(8), dp(4));
+
+        TextView t = new TextView(c);
+        t.setText(titre);
+        t.setTextSize(13f);
+        t.setTextColor(couleur);
+        t.setGravity(Gravity.CENTER);
+        carte.addView(t);
+
+        LinearLayout rangee = new LinearLayout(c);
+        rangee.setOrientation(HORIZONTAL);
+        rangee.setGravity(Gravity.CENTER);
+        rangee.setPadding(0, dp(6), 0, dp(2));
+
+        Chevrons icone = new Chevrons(c, sens, 2, couleur, dp(2));
+        LinearLayout.LayoutParams pIcone = new LinearLayout.LayoutParams(dp(18), dp(18));
+        pIcone.rightMargin = dp(8);
+        rangee.addView(icone, pIcone);
+
+        TextView valeur = new TextView(c);
+        valeur.setText("-- Mo");
+        valeur.setTextSize(16f);
+        valeur.setTypeface(valeur.getTypeface(), Typeface.BOLD);
+        valeur.setTextColor(c.getColor(R.color.texte));
+        valeur.setGravity(Gravity.CENTER);
+        valeur.setSingleLine(true);
+        rangee.addView(valeur);
+        carte.addView(rangee);
+
+        TextView debit = new TextView(c);
+        debit.setText("-- Ko/s");
+        debit.setTextSize(11f);
+        debit.setTextColor(c.getColor(R.color.texte_discret));
+        debit.setGravity(Gravity.CENTER);
+        carte.addView(debit);
+
+        ligne.addView(carte, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        return new TextView[]{valeur, debit};
+    }
+
+    // Icône de chevrons dessinée en code (sens : 0 bas, 1 haut, 2 droite)
+    private static class Chevrons extends View {
+        private final Paint pinceau = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int sens;
+        private final int nombre;
+
+        Chevrons(Context c, int sens, int nombre, int couleur, float epaisseur) {
+            super(c);
+            this.sens = sens;
+            this.nombre = nombre;
+            pinceau.setColor(couleur);
+            pinceau.setStyle(Paint.Style.STROKE);
+            pinceau.setStrokeWidth(epaisseur);
+            pinceau.setStrokeCap(Paint.Cap.ROUND);
+            pinceau.setStrokeJoin(Paint.Join.ROUND);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            float taille = Math.min(getWidth(), getHeight());
+            float ox = (getWidth() - taille) / 2f;
+            float oy = (getHeight() - taille) / 2f;
+            canvas.save();
+            float angle = sens == 1 ? 180f : (sens == 2 ? -90f : 0f);
+            canvas.rotate(angle, getWidth() / 2f, getHeight() / 2f);
+            for (int i = 0; i < nombre; i++) {
+                float cy = nombre == 1 ? 0.5f : (i == 0 ? 0.30f : 0.70f);
+                Path p = new Path();
+                p.moveTo(ox + 0.2f * taille, oy + (cy - 0.13f) * taille);
+                p.lineTo(ox + 0.5f * taille, oy + (cy + 0.13f) * taille);
+                p.lineTo(ox + 0.8f * taille, oy + (cy - 0.13f) * taille);
+                canvas.drawPath(p, pinceau);
+            }
+            canvas.restore();
+        }
+    }
+}

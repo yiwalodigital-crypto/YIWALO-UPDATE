@@ -1,0 +1,292 @@
+package com.yiwalo.tunnel;
+
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.os.Build;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.yiwalo.tunnel.config.ConfigStore;
+import com.yiwalo.tunnel.config.Configuration;
+import com.yiwalo.tunnel.config.EditeurLien;
+import com.yiwalo.tunnel.config.ErreurImport;
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.regex.Pattern;
+
+public class JournauxView extends LinearLayout {
+
+    private final TextView texte;
+    private final ScrollView defilement;
+    private final TextView pied;
+    private int derniereTaille = -1;
+    private Journal.Ligne derniereLigne;
+    private final long heureOuverture = System.currentTimeMillis();
+    private static final Pattern DATE_PAT = Pattern.compile(
+            "\\d{4}[/-]\\d{2}[/-]\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\s*");
+    private static final Pattern HEURE_PAT = Pattern.compile("^\\d{2}:\\d{2}:\\d{2}\\s*");
+    private static final Pattern MS_PAT = Pattern.compile("(\\d+) ms");
+
+    private final Runnable tic = new Runnable() {
+        @Override
+        public void run() {
+            rafraichir(false);
+            postDelayed(this, 1000);
+        }
+    };
+
+    public JournauxView(Context contexte) {
+        super(contexte);
+        setOrientation(VERTICAL);
+
+        TextView titre = new TextView(contexte);
+        titre.setText(R.string.journal_titre);
+        titre.setTextSize(20f);
+        titre.setTextColor(contexte.getColor(R.color.texte));
+        titre.setTypeface(titre.getTypeface(), Typeface.BOLD);
+        titre.setPadding(dp(16), dp(8), dp(16), 0);
+        addView(titre, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout actions = new LinearLayout(contexte);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        actions.setPadding(dp(8), 0, dp(8), dp(4));
+        actions.addView(action(contexte, R.string.journal_actualiser,
+                v -> rafraichir(true)), poids());
+        actions.addView(action(contexte, R.string.journal_copier,
+                v -> copier(Journal.texte(), R.string.journal_copies)), poids());
+        actions.addView(action(contexte, R.string.journal_rapport,
+                v -> copier(rapport(), R.string.journal_rapport_copie)), poids());
+        actions.addView(action(contexte, R.string.journal_effacer, v -> {
+            Journal.effacer();
+            rafraichir(true);
+        }), poids());
+        addView(actions, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        defilement = new ScrollView(contexte);
+        texte = new TextView(contexte);
+        texte.setTypeface(Typeface.MONOSPACE);
+        texte.setTextSize(11f);
+        texte.setTextColor(contexte.getColor(R.color.texte));
+        texte.setTextIsSelectable(true);
+        texte.setPadding(dp(16), dp(8), dp(16), dp(16));
+        defilement.addView(texte, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        addView(defilement, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        pied = new TextView(contexte);
+        pied.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        pied.setTextSize(13f);
+        pied.setPadding(dp(16), dp(10), dp(16), dp(10));
+        pied.setVisibility(View.GONE);
+        addView(pied, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        rafraichir(true);
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        postDelayed(tic, 1000);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        removeCallbacks(tic);
+        super.onDetachedFromWindow();
+    }
+
+    private LinearLayout.LayoutParams poids() {
+        return new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+    }
+
+    private TextView action(Context contexte, int libelle, View.OnClickListener ecouteur) {
+        TextView t = new TextView(contexte);
+        t.setText(libelle);
+        t.setTextSize(13f);
+        t.setGravity(Gravity.CENTER);
+        t.setTextColor(contexte.getColor(R.color.bleu_clair));
+        t.setPadding(dp(4), dp(10), dp(4), dp(10));
+        t.setOnClickListener(ecouteur);
+        return t;
+    }
+
+    private void rafraichir(boolean force) {
+        majPied();
+        List<Journal.Ligne> source = Journal.lignes();
+        Journal.Ligne fin = source.isEmpty() ? null : source.get(source.size() - 1);
+        if (!force && source.size() == derniereTaille && fin == derniereLigne) {
+            return;
+        }
+        derniereTaille = source.size();
+        derniereLigne = fin;
+
+        List<Journal.Ligne> lignes = new ArrayList<>(source);
+        Collections.sort(lignes, (a, b) -> Long.compare(a.heure, b.heure));
+
+        SimpleDateFormat format = new SimpleDateFormat("HH:mm:ss", Locale.FRANCE);
+        SpannableStringBuilder sb = new SpannableStringBuilder();
+        enteteAppareil(sb, format);
+
+        for (Journal.Ligne l : lignes.subList(Math.max(0, lignes.size() - 250), lignes.size())) {
+            String message = nettoyer(String.valueOf(l.message));
+            String mm0 = message.toLowerCase();
+            int debut = sb.length();
+            sb.append("[").append(format.format(new Date(l.heure))).append("] ")
+                    .append(message).append("\n");
+
+            java.util.regex.Matcher mm = MS_PAT.matcher(message);
+            if (l.niveau == Journal.Niveau.INFO && mm.find()) {
+                int ms = Integer.parseInt(mm.group(1));
+                String col = ms < 300 ? "#22C55E" : ms < 700 ? "#F59E0B" : "#EF4444";
+                sb.setSpan(new ForegroundColorSpan(Color.parseColor(col)),
+                        debut, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            } else if (l.niveau == Journal.Niveau.ERREUR) {
+                sb.setSpan(new ForegroundColorSpan(Color.parseColor("#EF4444")),
+                        debut, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            } else if (l.niveau == Journal.Niveau.AVERTISSEMENT) {
+                sb.setSpan(new ForegroundColorSpan(Color.parseColor("#F59E0B")),
+                        debut, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            } else {
+                // texte simple en blanc
+                sb.setSpan(new ForegroundColorSpan(Color.WHITE),
+                        debut, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+        }
+        texte.setText(sb);
+        defilement.post(() -> defilement.fullScroll(View.FOCUS_DOWN));
+    }
+
+    private static String nettoyer(String m) {
+        m = DATE_PAT.matcher(m).replaceAll("");
+        m = HEURE_PAT.matcher(m.trim()).replaceFirst("");
+        return m.trim();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void enteteAppareil(SpannableStringBuilder sb, SimpleDateFormat format) {
+        Context c = getContext();
+        String version = "";
+        try {
+            version = c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
+        } catch (Exception ignore) { }
+        String h = "[" + format.format(new Date(heureOuverture)) + "] ";
+        String[] infos = {
+            "YIWALO TUNNEL v" + version,
+            "Appareil : " + Build.MANUFACTURER + " (" + Build.MODEL + ")",
+            "Android " + Build.VERSION.RELEASE + " API-" + Build.VERSION.SDK_INT
+                    + " (" + Build.SUPPORTED_ABIS[0] + ")",
+            "Adresse IP " + ipLocale()
+        };
+        int bleu = Color.WHITE;
+        for (String s : infos) {
+            int d = sb.length();
+            sb.append(h).append(s).append("\n");
+            sb.setSpan(new ForegroundColorSpan(bleu), d, sb.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+    }
+
+    private String ipLocale() {
+        try {
+            for (java.net.NetworkInterface ni :
+                    Collections.list(java.net.NetworkInterface.getNetworkInterfaces())) {
+                for (java.net.InetAddress a : Collections.list(ni.getInetAddresses())) {
+                    if (!a.isLoopbackAddress() && !ni.getName().startsWith("tun") && a instanceof java.net.Inet4Address) {
+                        return a.getHostAddress();
+                    }
+                }
+            }
+        } catch (Exception ignore) { }
+        return "inconnue";
+    }
+
+    @SuppressWarnings("deprecation")
+    private String rapport() {
+        Context contexte = getContext();
+        StringBuilder sb = new StringBuilder();
+        sb.append("YIWALO TUNNEL - rapport de diagnostic\n");
+        try {
+            String version = contexte.getPackageManager()
+                    .getPackageInfo(contexte.getPackageName(), 0).versionName;
+            sb.append("Application : ").append(version).append("\n");
+        } catch (Exception ignore) {
+            // version indisponible : le rapport reste utile
+        }
+        sb.append("Android : ").append(Build.VERSION.RELEASE)
+                .append(" (API ").append(Build.VERSION.SDK_INT).append(")\n");
+        sb.append("État : ").append(SuiviVpn.etat().name()).append("\n");
+        Configuration active = new ConfigStore(contexte).active();
+        if (active == null) {
+            sb.append("Configuration : aucune\n");
+        } else {
+            sb.append("Protocole : ").append(active.type.libelle).append("\n");
+            try {
+                EditeurLien.Champs ch = EditeurLien.lire(active);
+                sb.append("Transport : ").append(ch.reseau).append("\n");
+                sb.append("Sécurité : ").append(ch.securite).append("\n");
+            } catch (ErreurImport e) {
+                sb.append("Transport et sécurité : non détaillés pour ce protocole\n");
+            }
+        }
+        String message = SuiviVpn.message();
+        if (!message.isEmpty()) {
+            sb.append("Dernier message : ").append(Journal.masquer(message)).append("\n");
+        }
+        sb.append("\nJournal :\n").append(Journal.texte());
+        return sb.toString();
+    }
+    private void majPied() {
+        long ms = Journal.latenceMs();
+        boolean connecte = "CONNECTE".equals(SuiviVpn.etat().name());
+        if (!connecte || ms < 0) {
+            pied.setVisibility(View.GONE);
+            return;
+        }
+        long age = System.currentTimeMillis() - Journal.latenceHeure();
+        if (age > 25000) {
+            pied.setTextColor(Color.parseColor("#EF4444"));
+            pied.setText("Latence : aucune réponse");
+        } else {
+            String col = ms < 300 ? "#22C55E" : ms < 700 ? "#F59E0B" : "#EF4444";
+            pied.setTextColor(Color.parseColor(col));
+            pied.setText("Latence : " + ms + " ms");
+        }
+        pied.setVisibility(View.VISIBLE);
+    }
+
+
+    private void copier(String contenu, int confirmation) {
+        Context contexte = getContext();
+        ClipboardManager cm =
+                (ClipboardManager) contexte.getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm != null) {
+            cm.setPrimaryClip(ClipData.newPlainText("YIWALO TUNNEL", contenu));
+            Toast.makeText(contexte, confirmation, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private int dp(int valeur) {
+        return Math.round(valeur * getResources().getDisplayMetrics().density);
+    }
+}

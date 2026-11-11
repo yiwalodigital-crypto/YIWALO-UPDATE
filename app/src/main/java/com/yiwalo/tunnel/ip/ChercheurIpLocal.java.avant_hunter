@@ -1,0 +1,156 @@
+package com.yiwalo.tunnel.ip;
+import android.content.Context;
+import android.net.ConnectivityManager;
+import android.os.Handler;
+import android.os.Looper;
+import java.util.ArrayList;
+import java.util.List;
+public final class ChercheurIpLocal {
+    public interface Ecoute {
+        void etat(String message);
+        void fini(boolean trouve, String ip);
+    }
+    public static final class Entree {
+        public final String ip;
+        public final boolean voulue;
+        Entree(String ip, boolean voulue) { this.ip = ip; this.voulue = voulue; }
+    }
+    private static final String PREFS = "yiwalo_reglages";
+    private static final Handler h = new Handler(Looper.getMainLooper());
+    public static final List<Entree> historique = new ArrayList<>();
+    public static volatile String texteEtat = "En attente";
+    public static volatile Runnable observateur;
+    private static volatile boolean actif;
+    private static int gen;
+    private static int essai;
+    private static String derniere;
+    private static Ecoute ecoute;
+    private ChercheurIpLocal() { }
+
+    public static boolean enCours() { return actif; }
+    public static void arreter() {
+        if (!actif) return;
+        actif = false;
+        gen++;
+        texteEtat = "Arrêté";
+        notifier();
+    }
+    public static String texteSauve(Context c) {
+        return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("ips_cibles", "");
+    }
+    public static void sauver(Context c, String t) {
+        c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("ips_cibles", t).apply();
+    }
+    public static int essaisSauve(Context c) {
+        return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("ips_essais", 50);
+    }
+    public static void sauverEssais(Context c, int n) {
+        c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt("ips_essais", n).apply();
+    }
+    public static List<String> cibles(String texte) {
+        List<String> l = new ArrayList<>();
+        if (texte == null) return l;
+        for (String x : texte.split("[\\s,;]+")) {
+            String t = x.trim();
+            if (!t.isEmpty()) l.add(t);
+        }
+        return l;
+    }
+    /** "10.45." ou "10.45.*" = préfixe ; "10.45.3.7" = adresse exacte. */
+    public static boolean correspond(String ip, List<String> cibles) {
+        for (String c : cibles) {
+            if (c.endsWith("*")) {
+                if (ip.startsWith(c.substring(0, c.length() - 1))) return true;
+            } else if (c.endsWith(".")) {
+                if (ip.startsWith(c)) return true;
+            } else if (ip.equals(c)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    private static String ipActuelle(Context app) {
+        ConnectivityManager cm =
+                (ConnectivityManager) app.getSystemService(Context.CONNECTIVITY_SERVICE);
+        return ReseauMobile.ipv4Mobile(cm);
+    }
+    private static void notifier() {
+        Runnable r = observateur;
+        if (r != null) r.run();
+    }
+    private static void etat(String m) {
+        texteEtat = m;
+        Ecoute e = ecoute;
+        if (e != null) e.etat(m);
+        notifier();
+    }
+    private static void noter(String ip, boolean ok) {
+        derniere = ip;
+        historique.add(0, new Entree(ip, ok));
+        while (historique.size() > 200) historique.remove(historique.size() - 1);
+        notifier();
+    }
+    private static void terminer(boolean trouve, String ip) {
+        actif = false;
+        texteEtat = trouve ? "IP voulue trouvée : " + ip : "Terminé sans trouver d'IP voulue";
+        notifier();
+        Ecoute e = ecoute;
+        if (e != null) e.fini(trouve, ip);
+    }
+    /** À appeler sur le thread principal. */
+    public static boolean demarrer(Context c, int max, Ecoute e) {
+        if (actif) return false;
+        ecoute = e;
+        Context app = c.getApplicationContext();
+        List<String> l = cibles(texteSauve(app));
+        if (l.isEmpty()) { etat("Liste vide : colle au moins une adresse."); return false; }
+        if (!AvionIp.automatiquePossible(app)) {
+            etat("Active l'assistant ou l'accessibilité.");
+            return false;
+        }
+        actif = true;
+        final int g = ++gen;
+        essai = 0;
+        derniere = null;
+        historique.clear();
+        String ip = ipActuelle(app);
+        if (ip != null) {
+            boolean ok = correspond(ip, l);
+            noter(ip, ok);
+            if (ok) { terminer(true, ip); return true; }
+        }
+        suivant(app, l, max, g);
+        return true;
+    }
+    private static void suivant(final Context app, final List<String> l, final int max, final int g) {
+        if (!actif || g != gen) return;
+        if (essai >= max) { terminer(false, derniere); return; }
+        essai++;
+        etat("Essai " + essai + "/" + max + " : mode avion en cours…");
+        if (!AvionIp.renouveler(app, null)) { terminer(false, derniere); return; }
+        h.postDelayed(() -> attendre(app, l, max, g, 0, false), 2000);
+    }
+    private static void attendre(final Context app, final List<String> l, final int max,
+                                 final int g, final int n, final boolean vuNull) {
+        if (!actif || g != gen) return;
+        String ip = ipActuelle(app);
+        if (ip != null && (vuNull || n >= 15)) {
+            boolean ok = correspond(ip, l);
+            noter(ip, ok);
+            if (ok) {
+                terminer(true, ip);
+            } else {
+                etat("IP obtenue : " + ip + " (non voulue)");
+                suivant(app, l, max, g);
+            }
+            return;
+        }
+        if (n >= 60) {
+            etat("Pas de réseau, nouvel essai…");
+            suivant(app, l, max, g);
+            return;
+        }
+        final boolean vn = vuNull || ip == null;
+        h.postDelayed(() -> attendre(app, l, max, g, n + 1, vn), 1000);
+    }
+}

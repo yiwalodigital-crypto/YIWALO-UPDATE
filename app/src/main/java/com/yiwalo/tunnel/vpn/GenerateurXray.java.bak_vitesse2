@@ -1,0 +1,747 @@
+package com.yiwalo.tunnel.vpn;
+
+import com.yiwalo.tunnel.config.Configuration;
+import com.yiwalo.tunnel.config.ErreurImport;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+
+public final class GenerateurXray {
+
+    public static final class Resultat {
+        public final String json;
+        public final int portTest;
+        public final String utilisateurTest;
+        public final String motDePasseTest;
+
+        Resultat(String json, int portTest, String utilisateurTest, String motDePasseTest) {
+            this.json = json;
+            this.portTest = portTest;
+            this.utilisateurTest = utilisateurTest;
+            this.motDePasseTest = motDePasseTest;
+        }
+    }
+
+    private static final class Sortie {
+        final JSONObject proxy;
+        final boolean garderNom;
+
+        Sortie(JSONObject proxy, boolean garderNom) {
+            this.proxy = proxy;
+            this.garderNom = garderNom;
+        }
+    }
+
+    private static final class Lien {
+        String info = "";
+        final Map<String, String> parametres = new HashMap<>();
+    }
+
+    private GenerateurXray() {
+    }
+
+    public static Resultat generer(Configuration c, String adresse) throws ErreurImport {
+        fpApplique = false;
+        try {
+            if (c.type.name().equals("SLOWDNS") || c.type.name().equals("SSH")
+                    || c.type.name().equals("HYSTERIA2") || c.type.name().equals("TUIC")) {
+                return assemblerSlowDns(c);
+            }
+            Sortie sortie;
+            switch (c.type) {
+                case VLESS:
+                    sortie = sortieVless(c, adresse);
+                    break;
+                case TROJAN:
+                    sortie = sortieTrojan(c, adresse);
+                    break;
+                case VMESS:
+                    sortie = sortieVmess(c, adresse);
+                    break;
+                case SHADOWSOCKS:
+                    sortie = sortieShadowsocks(c, adresse);
+                    break;
+                default:
+                    throw new ErreurImport("Ce type de configuration n'est pas pris en charge "
+                            + "par le moteur.");
+            }
+            return assembler(c, adresse, sortie);
+        } catch (JSONException e) {
+            throw new ErreurImport("Génération de la configuration impossible : "
+                    + e.getMessage());
+        } catch (IOException e) {
+            throw new ErreurImport("Aucun port local disponible pour le test de connexion.");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Assemblage commun : interface TUN, entrée de test, sortie, DNS
+    // ------------------------------------------------------------------
+
+    private static Resultat assemblerSlowDns(Configuration c) throws JSONException, IOException {
+        SecureRandom hasard = new SecureRandom();
+        String utilisateurTest = "u" + hex(hasard, 8);
+        String motDePasseTest = hex(hasard, 16);
+        int portTest = portLibre();
+        JSONObject tun = new JSONObject()
+                .put("tag", "tun-in")
+                .put("protocol", "tun")
+                .put("settings", new JSONObject().put("name", "xray0").put("MTU", 1400))
+            .put("sniffing", new JSONObject().put("enabled", true)
+                .put("destOverride", new JSONArray().put("http").put("tls")));
+        JSONObject socks = new JSONObject()
+                .put("tag", "test-in")
+                .put("listen", "127.0.0.1")
+                .put("port", portTest)
+                .put("protocol", "socks")
+                .put("settings", new JSONObject()
+                        .put("auth", "password")
+                        .put("udp", false)
+                        .put("accounts", new JSONArray().put(new JSONObject()
+                                .put("user", utilisateurTest)
+                                .put("pass", motDePasseTest))));
+        JSONObject proxy = new JSONObject()
+                .put("tag", "proxy")
+                .put("protocol", "socks")
+                .put("settings", new JSONObject().put("servers", new JSONArray().put(
+                        new JSONObject().put("address", "127.0.0.1").put("port", com.yiwalo.tunnel.vpn.YiwaloVpnService.portSocksSlow))));
+        JSONObject racine = new JSONObject()
+                .put("log", new JSONObject().put("loglevel", "warning").put("access", "none"))
+                .put("policy", politique().put("levels", new JSONObject().put("0", new JSONObject()
+                .put("handshake", 30).put("connIdle", 300)
+                .put("uplinkOnly", 5).put("downlinkOnly", 30).put("bufferSize", 64))))
+        .put("routing", new JSONObject().put("domainStrategy", "AsIs").put("rules", new JSONArray()
+                .put(new JSONObject().put("type", "field").put("network", "udp")
+                    .put("port", "443").put("outboundTag", "block"))))
+        .put("inbounds", inbounds(tun, socks))
+                .put("outbounds", new JSONArray().put(proxy)
+                        .put(new JSONObject().put("tag", "direct").put("protocol", "freedom"))
+                .put(new JSONObject().put("tag", "block").put("protocol", "blackhole")));
+        return new Resultat(avecStats(racine).toString(), portTest, utilisateurTest, motDePasseTest);
+    }
+
+    private static Resultat assembler(Configuration c, String adresse, Sortie sortie)
+            throws JSONException, IOException {
+        SecureRandom hasard = new SecureRandom();
+        String utilisateurTest = "u" + hex(hasard, 8);
+        String motDePasseTest = hex(hasard, 16);
+        int portTest = portLibre();
+
+        JSONObject tun = new JSONObject()
+                .put("tag", "tun-in")
+                .put("protocol", "tun")
+                .put("settings", new JSONObject().put("name", "xray0").put("MTU", 1400))
+            .put("sniffing", new JSONObject().put("enabled", true)
+                .put("destOverride", new JSONArray().put("http").put("tls")));
+        JSONObject socks = new JSONObject()
+                .put("tag", "test-in")
+                .put("listen", "127.0.0.1")
+                .put("port", portTest)
+                .put("protocol", "socks")
+                .put("settings", new JSONObject()
+                        .put("auth", "password")
+                        .put("udp", false)
+                        .put("accounts", new JSONArray().put(new JSONObject()
+                                .put("user", utilisateurTest)
+                                .put("pass", motDePasseTest))));
+
+        appliquerMux(sortie.proxy);
+        JSONObject racine = new JSONObject()
+                .put("log", new JSONObject().put("loglevel", "warning").put("access", "none"))
+                .put("policy", politique().put("levels", new JSONObject().put("0", new JSONObject()
+                .put("handshake", 30).put("connIdle", 300)
+                .put("uplinkOnly", 5).put("downlinkOnly", 30).put("bufferSize", 64))))
+        .put("routing", new JSONObject().put("domainStrategy", "AsIs").put("rules", new JSONArray()
+                .put(new JSONObject().put("type", "field").put("network", "udp")
+                    .put("port", "443").put("outboundTag", "block"))))
+        .put("inbounds", inbounds(tun, socks))
+                .put("outbounds", new JSONArray().put(sortie.proxy)
+                        .put(new JSONObject().put("tag", "direct").put("protocol", "freedom"))
+                .put(new JSONObject().put("tag", "block").put("protocol", "blackhole")));
+        // HOSTS-RETIRE : Xray resout le nom lui-meme (l'application est exclue du VPN)
+        return new Resultat(avecStats(racine).toString(), portTest, utilisateurTest, motDePasseTest);
+    }
+
+    // ------------------------------------------------------------------
+    // Mux : une seule connexion TLS/WS vers le serveur pour plusieurs flux.
+    // Gros gain sur les serveurs lents (un seul handshake au lieu d'un par site).
+    // Desactive pour le flow xtls-vision (incompatible), grpc/xhttp, Shadowsocks.
+    // ------------------------------------------------------------------
+
+    /** Mis a false par le service si la connexion echoue avec le mux. */
+    public static volatile boolean muxActif = true;
+
+    /**
+     * Reglage reseau essaye automatiquement quand le serveur ne repond pas :
+     * 0 = defaut (mux) | 1 = sans mux + empreinte firefox | 2 = sans mux + empreinte android
+     * | 3 = sans mux + options TCP minimales.
+     */
+    public static volatile int variante = 0;
+    /** Vrai si l'empreinte TLS a ete remplacee pour la derniere configuration generee. */
+    public static volatile boolean fpApplique = false;
+
+    /** Partage de connexion : proxy HTTP ouvert sur le point d'accès (0 = désactivé). */
+    public static volatile int partagePort = 0;
+    public static volatile String partageUser = "";
+    public static volatile String partagePass = "";
+    /** Port local de l'API de statistiques du moteur (0 = pas de statistiques). */
+    public static volatile int portApi = 0;
+
+    private static JSONObject politique() throws JSONException {
+        JSONObject p = new JSONObject();
+        if (partagePort > 0) {
+            p.put("system", new JSONObject()
+                    .put("statsInboundUplink", true)
+                    .put("statsInboundDownlink", true));
+        }
+        return p;
+    }
+
+    /** Ajoute l'API de statistiques (127.0.0.1 seulement) quand le partage est actif. */
+    private static JSONObject avecStats(JSONObject racine) throws JSONException, IOException {
+        if (partagePort <= 0) {
+            return racine;
+        }
+        int port = portLibre();
+        portApi = port;
+        racine.put("stats", new JSONObject());
+        racine.put("api", new JSONObject().put("tag", "api")
+                .put("services", new JSONArray().put("StatsService")));
+        racine.getJSONArray("inbounds").put(new JSONObject()
+                .put("tag", "api").put("listen", "127.0.0.1").put("port", port)
+                .put("protocol", "dokodemo-door")
+                .put("settings", new JSONObject().put("address", "127.0.0.1")));
+        JSONObject routage = racine.getJSONObject("routing");
+        JSONArray anciennes = routage.getJSONArray("rules");
+        JSONArray regles = new JSONArray().put(new JSONObject().put("type", "field")
+                .put("inboundTag", new JSONArray().put("api")).put("outboundTag", "api"));
+        for (int i = 0; i < anciennes.length(); i++) {
+            regles.put(anciennes.get(i));
+        }
+        routage.put("rules", regles);
+        return racine;
+    }
+
+    private static JSONArray inbounds(JSONObject tun, JSONObject socks) throws JSONException {
+        JSONArray a = new JSONArray().put(tun).put(socks);
+        if (partagePort > 0) {
+            JSONObject reglages = new JSONObject().put("allowTransparent", false);
+            if (!partagePass.isEmpty()) {
+                reglages.put("accounts", new JSONArray().put(new JSONObject()
+                        .put("user", partageUser).put("pass", partagePass)));
+            }
+            a.put(new JSONObject()
+                    .put("tag", "partage-in")
+                    .put("listen", "0.0.0.0")
+                    .put("port", partagePort)
+                    .put("protocol", "http")
+                    .put("settings", reglages));
+        }
+        return a;
+    }
+
+    private static void appliquerMux(JSONObject proxy) throws JSONException {
+        if (!muxActif || variante != 0) {
+            return;
+        }
+        String proto = proxy.optString("protocol", "");
+        if (!proto.equals("vless") && !proto.equals("vmess") && !proto.equals("trojan")) {
+            return;
+        }
+        JSONObject ss = proxy.optJSONObject("streamSettings");
+        if (ss == null) {
+            return;
+        }
+        if (ss.optString("security", "none").equals("reality")) {
+            return;
+        }
+        String reseau = ss.optString("network", "tcp");
+        if (!reseau.equals("tcp") && !reseau.equals("ws") && !reseau.equals("httpupgrade")) {
+            return;
+        }
+        JSONObject st = proxy.optJSONObject("settings");
+        JSONArray vnext = st == null ? null : st.optJSONArray("vnext");
+        if (vnext != null && vnext.length() > 0) {
+            JSONArray users = vnext.getJSONObject(0).optJSONArray("users");
+            if (users != null && users.length() > 0
+                    && !users.getJSONObject(0).optString("flow", "").isEmpty()) {
+                return;
+            }
+        }
+        proxy.put("mux", new JSONObject()
+                .put("enabled", true)
+                .put("concurrency", 8)
+                .put("xudpConcurrency", 16)
+                .put("xudpProxyUDP443", "reject"));
+    }
+
+    // ------------------------------------------------------------------
+    // VLESS
+    // ------------------------------------------------------------------
+
+    private static Sortie sortieVless(Configuration c, String adresse)
+            throws ErreurImport, JSONException {
+        Lien l = decouper(c.lienOriginal, "vless://".length());
+        Map<String, String> p = l.parametres;
+        verifierInsecure(c, p);
+        appliquerSni(c, p);
+
+        boolean sansChiffrement = valeur(p, "security", "none").equalsIgnoreCase("none");
+        boolean garderNom = sansChiffrement && estDomaine(c.serveur);
+        String adresseSortante = (sansChiffrement && estDomaine(c.serveur)) ? c.serveur : (garderNom ? c.serveur : adresse);
+
+        JSONObject utilisateur = new JSONObject()
+                .put("id", l.info)
+                .put("encryption", "none");
+        String flow = valeur(p, "flow", "");
+        if (!flow.isEmpty()) {
+            utilisateur.put("flow", flow);
+        }
+        JSONObject serveur = new JSONObject()
+                .put("address", adresseSortante)
+                .put("port", c.port)
+                .put("users", new JSONArray().put(utilisateur));
+        JSONObject proxy = new JSONObject()
+                .put("tag", "proxy")
+                .put("protocol", "vless")
+                .put("settings", new JSONObject().put("vnext", new JSONArray().put(serveur)))
+                .put("streamSettings", flux(p, c.serveur));
+        if (garderNom) {
+            JSONObject ss = proxy.getJSONObject("streamSettings");
+            JSONObject so = ss.optJSONObject("sockopt");
+            if (so == null) {
+                so = new JSONObject();
+                ss.put("sockopt", so);
+            }
+            so.put("domainStrategy", "UseIPv4");
+        }
+        return new Sortie(proxy, garderNom);
+    }
+
+    // ------------------------------------------------------------------
+    // Trojan (TLS par défaut si le lien ne précise pas la sécurité)
+    // ------------------------------------------------------------------
+
+    private static Sortie sortieTrojan(Configuration c, String adresse)
+            throws ErreurImport, JSONException {
+        Lien l = decouper(c.lienOriginal, "trojan://".length());
+        Map<String, String> p = l.parametres;
+        verifierInsecure(c, p);
+        appliquerSni(c, p);
+        if (valeur(p, "sni", "").isEmpty() && !valeur(p, "peer", "").isEmpty()) {
+            p.put("sni", p.get("peer"));
+        }
+        if (valeur(p, "security", "").isEmpty()) {
+            p.put("security", "tls");
+        }
+        JSONObject serveur = new JSONObject()
+                .put("address", adresse)
+                .put("port", c.port)
+                .put("password", l.info);
+        JSONObject proxy = new JSONObject()
+                .put("tag", "proxy")
+                .put("protocol", "trojan")
+                .put("settings", new JSONObject().put("servers", new JSONArray().put(serveur)))
+                .put("streamSettings", flux(p, c.serveur));
+        return new Sortie(proxy, false);
+    }
+
+    // ------------------------------------------------------------------
+    // VMess (lien vmess:// = JSON encodé en Base64)
+    // ------------------------------------------------------------------
+
+    private static Sortie sortieVmess(Configuration c, String adresse)
+            throws ErreurImport, JSONException {
+        String contenu = c.lienOriginal.substring("vmess://".length()).trim();
+        JSONObject j = new JSONObject(new String(decoderBase64(contenu), StandardCharsets.UTF_8));
+
+        Map<String, String> p = new HashMap<>();
+        String reseau = texte(j, "net", "tcp").toLowerCase(Locale.ROOT);
+        p.put("type", reseau);
+        p.put("headerType", texte(j, "type", "none"));
+        String host = texte(j, "host", "");
+        String chemin = texte(j, "path", "");
+        if (reseau.equals("grpc")) {
+            p.put("serviceName", chemin);
+            p.put("authority", host);
+        } else {
+            p.put("host", host);
+            p.put("path", chemin);
+        }
+        p.put("security", texte(j, "tls", "").equalsIgnoreCase("tls") ? "tls" : "none");
+        p.put("sni", texte(j, "sni", ""));
+        p.put("alpn", texte(j, "alpn", ""));
+        p.put("fp", texte(j, "fp", ""));
+        if (c.certNonVerifie) {
+            p.put("certNonVerifie", "1");
+        } else {
+            p.put("allowInsecure", texte(j, "allowInsecure", ""));
+            refuserInsecure(p);
+        }
+        appliquerSni(c, p);
+
+        int alterId;
+        try {
+            alterId = Integer.parseInt(texte(j, "aid", "0"));
+        } catch (NumberFormatException e) {
+            alterId = 0;
+        }
+        JSONObject utilisateur = new JSONObject()
+                .put("id", texte(j, "id", ""))
+                .put("security", texte(j, "scy", "auto"));
+        if (alterId > 0) {
+            utilisateur.put("alterId", alterId);
+        }
+        JSONObject serveur = new JSONObject()
+                .put("address", adresse)
+                .put("port", c.port)
+                .put("users", new JSONArray().put(utilisateur));
+        JSONObject proxy = new JSONObject()
+                .put("tag", "proxy")
+                .put("protocol", "vmess")
+                .put("settings", new JSONObject().put("vnext", new JSONArray().put(serveur)))
+                .put("streamSettings", flux(p, c.serveur));
+        return new Sortie(proxy, false);
+    }
+
+    // ------------------------------------------------------------------
+    // Shadowsocks
+    // ------------------------------------------------------------------
+
+    private static Sortie sortieShadowsocks(Configuration c, String adresse)
+            throws ErreurImport, JSONException {
+        String[] methodeEtMotDePasse = methodeEtMotDePasse(c.lienOriginal);
+        JSONObject serveur = new JSONObject()
+                .put("address", adresse)
+                .put("port", c.port)
+                .put("method", methodeEtMotDePasse[0])
+                .put("password", methodeEtMotDePasse[1]);
+        JSONObject proxy = new JSONObject()
+                .put("tag", "proxy")
+                .put("protocol", "shadowsocks")
+                .put("settings", new JSONObject().put("servers", new JSONArray().put(serveur)));
+        return new Sortie(proxy, false);
+    }
+
+    private static String[] methodeEtMotDePasse(String lien) throws ErreurImport {
+        String reste = lien.substring("ss://".length());
+        int diese = reste.indexOf('#');
+        if (diese >= 0) {
+            reste = reste.substring(0, diese);
+        }
+        int interro = reste.indexOf('?');
+        if (interro >= 0) {
+            reste = reste.substring(0, interro);
+        }
+        while (reste.endsWith("/")) {
+            reste = reste.substring(0, reste.length() - 1);
+        }
+        String info;
+        int arobase = reste.lastIndexOf('@');
+        if (arobase >= 0) {
+            String brut = decoder(reste.substring(0, arobase));
+            info = brut.contains(":")
+                    ? brut
+                    : new String(decoderBase64(brut), StandardCharsets.UTF_8);
+        } else {
+            String decode = new String(decoderBase64(reste), StandardCharsets.UTF_8);
+            int a = decode.lastIndexOf('@');
+            if (a < 0) {
+                throw new ErreurImport("Le lien Shadowsocks est mal formé.");
+            }
+            info = decode.substring(0, a);
+        }
+        int deuxPoints = info.indexOf(':');
+        if (deuxPoints < 0) {
+            throw new ErreurImport("La méthode ou le mot de passe Shadowsocks est manquant.");
+        }
+        return new String[]{
+                info.substring(0, deuxPoints).toLowerCase(Locale.ROOT),
+                info.substring(deuxPoints + 1)};
+    }
+
+    // ------------------------------------------------------------------
+    // Transport et sécurité (commun à VLESS, Trojan et VMess)
+    // ------------------------------------------------------------------
+
+    private static JSONObject flux(Map<String, String> p, String domaine)
+            throws ErreurImport, JSONException {
+        JSONObject flux = new JSONObject();
+        String reseau = valeur(p, "type", "tcp").toLowerCase(Locale.ROOT);
+        String chemin = valeur(p, "path", "/");
+        String hote = valeur(p, "host", domaine);
+
+        switch (reseau) {
+            case "tcp":
+                flux.put("network", "tcp");
+                if (valeur(p, "headerType", "none").equalsIgnoreCase("http")) {
+                    JSONArray tcpChemins = new JSONArray();
+                    for (String x : valeur(p, "path", "/").split(",")) {
+                        if (!x.trim().isEmpty()) {
+                            tcpChemins.put(x.trim());
+                        }
+                    }
+                    JSONArray tcpHotes = new JSONArray();
+                    for (String x : hote.split(",")) {
+                        if (!x.trim().isEmpty()) {
+                            tcpHotes.put(x.trim());
+                        }
+                    }
+                    JSONObject tcpEntetes = new JSONObject();
+                    if (tcpHotes.length() > 0) {
+                        tcpEntetes.put("Host", tcpHotes);
+                    }
+                    JSONObject tcpRequete = new JSONObject()
+                            .put("version", "1.1")
+                            .put("method", "GET")
+                            .put("path", tcpChemins)
+                            .put("headers", tcpEntetes);
+                    flux.put("tcpSettings", new JSONObject().put("header",
+                            new JSONObject().put("type", "http").put("request", tcpRequete)));
+                }
+                break;
+            case "ws":
+                flux.put("network", "ws");
+                JSONObject ws = new JSONObject().put("path", chemin).put("heartbeatPeriod", 30);
+                if (!hote.isEmpty()) {
+                    ws.put("headers", new JSONObject().put("Host", hote));
+                }
+                flux.put("wsSettings", ws);
+                break;
+            case "grpc":
+                flux.put("network", "grpc");
+                flux.put("grpcSettings", new JSONObject()
+                        .put("serviceName", valeur(p, "serviceName", ""))
+                        .put("authority", valeur(p, "authority", ""))
+                        .put("idle_timeout", 60)
+                        .put("health_check_timeout", 20));
+                break;
+            case "httpupgrade":
+                flux.put("network", "httpupgrade");
+                JSONObject hu = new JSONObject().put("path", chemin);
+                if (!hote.isEmpty()) {
+                    hu.put("host", hote);
+                }
+                flux.put("httpupgradeSettings", hu);
+                break;
+            case "splithttp":
+            case "xhttp":
+                flux.put("network", "xhttp");
+                JSONObject xh = new JSONObject().put("path", chemin);
+                if (!hote.isEmpty()) {
+                    xh.put("host", hote);
+                }
+                String mode = valeur(p, "mode", "");
+                if (!mode.isEmpty()) {
+                    xh.put("mode", mode);
+                }
+                flux.put("xhttpSettings", xh);
+                break;
+            default:
+                throw new ErreurImport("Le transport « " + reseau + " » n'est pas encore pris "
+                        + "en charge par le moteur. Transports disponibles : tcp, ws, grpc, "
+                        + "httpupgrade, xhttp.");
+        }
+
+        String securite = valeur(p, "security", "none").toLowerCase(Locale.ROOT);
+        String hoteLien = valeur(p, "host", "");
+        String sni = valeur(p, "sni", hoteLien.isEmpty() ? domaine : hoteLien);
+        String empreinte = valeur(p, "fp", "");
+        if ((variante == 1 || variante == 2)
+                && (securite.equals("tls") || securite.equals("reality"))) {
+            // Empreinte plus petite (sans cle post-quantique) : passe mieux sur les reseaux
+            // lents ou filtres. Reality ne verifie pas l'empreinte cote serveur.
+            empreinte = variante == 1 ? "firefox" : "android";
+            fpApplique = true;
+        }
+        switch (securite) {
+            case "none":
+                flux.put("security", "none");
+                break;
+            case "tls":
+                flux.put("security", "tls");
+                JSONObject tls = new JSONObject();
+                if (!sni.isEmpty()) {
+                    tls.put("serverName", sni);
+                }
+                if (!empreinte.isEmpty()) {
+                    tls.put("fingerprint", empreinte);
+                }
+                String alpn = valeur(p, "alpn", "");
+                if (!alpn.isEmpty()) {
+                    JSONArray liste = new JSONArray();
+                    for (String a : alpn.split(",")) {
+                        if (!a.trim().isEmpty()) {
+                            liste.put(a.trim());
+                        }
+                    }
+                    tls.put("alpn", liste);
+                }
+            String epingle = valeur(p, "pin", "").replace(":", "").trim().toLowerCase(Locale.ROOT);
+            if (epingle.matches("[0-9a-f]{64}")) {
+                tls.put("pinnedPeerCertSha256", epingle);
+            }
+                // allowInsecure supprime : refuse par le moteur Xray actuel
+            flux.put("tlsSettings", tls);
+                break;
+            case "reality":
+                flux.put("security", "reality");
+                flux.put("realitySettings", new JSONObject()
+                        .put("serverName", sni)
+                        .put("fingerprint", empreinte.isEmpty() ? "chrome" : empreinte)
+                        .put("publicKey", valeur(p, "pbk", ""))
+                        .put("shortId", valeur(p, "sid", ""))
+                        .put("spiderX", valeur(p, "spx", "")));
+                break;
+            default:
+                throw new ErreurImport("Type de sécurité « " + securite
+                        + " » non pris en charge.");
+        }
+        // Reponse plus rapide (pas d'attente Nagle) et connexion maintenue sur les reseaux mobiles
+        JSONObject sockopt = new JSONObject().put("tcpNoDelay", true);
+        if (variante != 3) {
+            sockopt.put("tcpKeepAliveIdle", 25)
+                    .put("tcpKeepAliveInterval", 25)
+                    .put("tcpUserTimeout", 60000);
+        }
+        flux.put("sockopt", sockopt);
+        return flux;
+    }
+
+    // ------------------------------------------------------------------
+    // Outils
+    // ------------------------------------------------------------------
+
+    private static Lien decouper(String lien, int longueurSchema) throws ErreurImport {
+        Lien l = new Lien();
+        String reste = lien.substring(longueurSchema);
+        int diese = reste.indexOf('#');
+        if (diese >= 0) {
+            reste = reste.substring(0, diese);
+        }
+        String requete = "";
+        int interro = reste.indexOf('?');
+        if (interro >= 0) {
+            requete = reste.substring(interro + 1);
+            reste = reste.substring(0, interro);
+        }
+        int arobase = reste.lastIndexOf('@');
+        if (arobase < 0) {
+            throw new ErreurImport("Lien mal formé : identifiant manquant.");
+        }
+        l.info = decoder(reste.substring(0, arobase));
+        for (String paire : requete.split("&")) {
+            if (paire.isEmpty()) {
+                continue;
+            }
+            int egal = paire.indexOf('=');
+            if (egal < 0) {
+                l.parametres.put(decoder(paire), "");
+            } else {
+                l.parametres.put(decoder(paire.substring(0, egal)),
+                        decoder(paire.substring(egal + 1)));
+            }
+        }
+        return l;
+    }
+
+    private static void verifierInsecure(Configuration c, Map<String, String> p)
+            throws ErreurImport {
+        if (c.certNonVerifie) {
+            p.put("certNonVerifie", "1");
+        } else {
+            refuserInsecure(p);
+        }
+    }
+
+    private static void refuserInsecure(Map<String, String> p) throws ErreurImport {
+        // TROJAN-OK : allowInsecure n'existe plus dans Xray ; le parametre est ignore
+        p.remove("allowInsecure");
+        p.remove("insecure");
+    }
+
+    private static void appliquerSni(Configuration c, Map<String, String> p) {
+        if (c.pinCert != null && !c.pinCert.isEmpty()) {
+            p.put("pin", c.pinCert);
+        }
+        if (!c.sniManuel.isEmpty()) {
+            p.put("sni", c.sniManuel);
+        }
+    }
+
+    private static boolean estDomaine(String hote) {
+        return !hote.matches("^[0-9.]+$") && !hote.contains(":");
+    }
+
+    private static String texte(JSONObject j, String cle, String defaut) {
+        String v = j.optString(cle, defaut);
+        return (v == null || v.isEmpty() || v.equals("null")) ? defaut : v.trim();
+    }
+
+    private static String valeur(Map<String, String> p, String cle, String defaut) {
+        String v = p.get(cle);
+        return (v == null || v.isEmpty()) ? defaut : v;
+    }
+
+    private static boolean vrai(String v) {
+        return v != null && (v.equals("1") || v.equalsIgnoreCase("true"));
+    }
+
+    private static String decoder(String texte) {
+        try {
+            return URLDecoder.decode(texte.replace("+", "%2B"), "UTF-8");
+        } catch (IllegalArgumentException | UnsupportedEncodingException e) {
+            return texte;
+        }
+    }
+
+    private static byte[] decoderBase64(String texte) throws ErreurImport {
+        StringBuilder sb = new StringBuilder();
+        for (char ch : texte.toCharArray()) {
+            if (ch == '-') {
+                sb.append('+');
+            } else if (ch == '_') {
+                sb.append('/');
+            } else if (ch != '=' && !Character.isWhitespace(ch)) {
+                sb.append(ch);
+            }
+        }
+        while (sb.length() % 4 != 0) {
+            sb.append('=');
+        }
+        try {
+            return Base64.getDecoder().decode(sb.toString());
+        } catch (IllegalArgumentException e) {
+            throw new ErreurImport("Contenu Base64 invalide.");
+        }
+    }
+
+    private static String hex(SecureRandom hasard, int octets) {
+        byte[] b = new byte[octets];
+        hasard.nextBytes(b);
+        StringBuilder sb = new StringBuilder();
+        for (byte x : b) {
+            sb.append(String.format(Locale.ROOT, "%02x", x));
+        }
+        return sb.toString();
+    }
+
+    private static int portLibre() throws IOException {
+        try (ServerSocket s = new ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))) {
+            return s.getLocalPort();
+        }
+    }
+}

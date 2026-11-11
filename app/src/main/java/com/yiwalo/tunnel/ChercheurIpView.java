@@ -1,0 +1,373 @@
+package com.yiwalo.tunnel;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
+import android.provider.Settings;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+import com.yiwalo.tunnel.ip.AlerteIp;
+import com.yiwalo.tunnel.ip.AvionIp;
+import com.yiwalo.tunnel.ip.ChercheurIpLocal;
+import com.yiwalo.tunnel.ip.RechercheIpService;
+import java.util.Collections;
+import java.util.List;
+
+public class ChercheurIpView extends LinearLayout {
+    private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
+    private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+    private static final String CLE_TROUVE = "IP voulue trouvée : ";
+    private final Context ctx;
+    private TextView ipVue, pastille, etat, principal, trouveIp;
+    private LinearLayout chips, carteTrouve;
+    private EditText delai;
+    private final Runnable rafraichir = new Runnable() {
+        @Override public void run() { majEcran(); }
+    };
+    private final Runnable tic = new Runnable() {
+        @Override public void run() { majEcran(); postDelayed(this, 2000); }
+    };
+
+    static int dp(Context c, int v) { return Ui.dp(c, v); }
+    private int dp(int v) { return Ui.dp(ctx, v); }
+    static GradientDrawable fond(Context c, int couleur, int rayon, int bord) {
+        return Ui.fond(c, couleur, rayon, bord);
+    }
+    public static View tuile(Context c, String icone, String titre, String sous,
+                             final Runnable action) {
+        return Ui.rangee(c, R.drawable.ic_signal, Ui.VERT, titre, sous, action);
+    }
+
+    public ChercheurIpView(final Context ctx, final Runnable retour) {
+        super(ctx);
+        this.ctx = ctx;
+        setOrientation(VERTICAL);
+        setPadding(dp(16), dp(14), dp(16), dp(32));
+        addView(Ui.entete(ctx, "RECHERCHE D'IP", retour));
+        int p = dp(16);
+
+        // IP actuelle
+        LinearLayout hero = Ui.carte(ctx);
+        hero.setPadding(p, p, p, p);
+        LinearLayout haut = new LinearLayout(ctx);
+        haut.setOrientation(HORIZONTAL);
+        haut.setGravity(Gravity.CENTER_VERTICAL);
+        TextView lib = Ui.texte(ctx, "IP ACTUELLE", 11f, Ui.DISCRET, true);
+        lib.setLetterSpacing(0.1f);
+        lib.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP, 1f));
+        haut.addView(lib);
+        pastille = Ui.texte(ctx, "", 11f, Ui.DISCRET, true);
+        pastille.setPadding(dp(10), dp(4), dp(10), dp(4));
+        haut.addView(pastille);
+        hero.addView(haut);
+        ipVue = Ui.texte(ctx, "—", 28f, Ui.TEXTE, true);
+        ipVue.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        ipVue.setPadding(0, dp(8), 0, 0);
+        hero.addView(ipVue);
+        etat = Ui.texte(ctx, "", 12f, Ui.BLEU, false);
+        etat.setPadding(0, dp(6), 0, 0);
+        hero.addView(etat);
+        addView(hero);
+
+        // IP trouvée
+        carteTrouve = Ui.carte(ctx);
+        carteTrouve.setPadding(p, p, p, p);
+        carteTrouve.setBackground(Ui.fond(ctx, 0xFF14532D, 16, Ui.VERT));
+        carteTrouve.addView(Ui.texte(ctx, "IP VOULUE TROUVÉE", 11f, 0xFF86EFAC, true));
+        trouveIp = Ui.texte(ctx, "", 24f, 0xFFBBF7D0, true);
+        trouveIp.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        trouveIp.setPadding(0, dp(6), 0, 0);
+        carteTrouve.addView(trouveIp);
+        carteTrouve.setOnClickListener(v -> {
+            ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("IP", trouveIp.getText()));
+            T.toast(ctx, "IP copiée", Toast.LENGTH_SHORT).show();
+        });
+        carteTrouve.setVisibility(GONE);
+        addView(carteTrouve);
+
+        // Adresses voulues
+        LinearLayout c1 = Ui.carte(ctx);
+        c1.setPadding(p, p, p, dp(10));
+        LinearLayout t1 = new LinearLayout(ctx);
+        t1.setOrientation(HORIZONTAL);
+        t1.setGravity(Gravity.CENTER_VERTICAL);
+        TextView tt = Ui.texte(ctx, "Adresses voulues", 15f, Ui.TEXTE, true);
+        tt.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP, 1f));
+        t1.addView(tt);
+        ImageView edit = new ImageView(ctx);
+        edit.setImageResource(R.drawable.ic_modifier);
+        edit.setColorFilter(Ui.BLEU);
+        edit.setPadding(dp(8), dp(8), dp(8), dp(8));
+        edit.setLayoutParams(new LinearLayout.LayoutParams(dp(40), dp(40)));
+        edit.setOnClickListener(v -> editerListe());
+        t1.addView(edit);
+        c1.addView(t1);
+        chips = new LinearLayout(ctx);
+        chips.setOrientation(VERTICAL);
+        chips.setPadding(0, dp(8), 0, 0);
+        c1.addView(chips);
+        addView(c1);
+
+        // Recherche
+        LinearLayout c2 = Ui.carte(ctx);
+        c2.setPadding(p, p, p, p);
+        LinearLayout ligne = new LinearLayout(ctx);
+        ligne.setOrientation(HORIZONTAL);
+        ligne.setGravity(Gravity.CENTER_VERTICAL);
+        TextView l2 = Ui.texte(ctx, "Pause entre essais", 14f, Ui.TEXTE, false);
+        l2.setLayoutParams(new LinearLayout.LayoutParams(0, WRAP, 1f));
+        ligne.addView(l2);
+        delai = new EditText(ctx);
+        delai.setSingleLine(true);
+        delai.setText(String.valueOf(ChercheurIpLocal.delaiSauve(ctx)));
+        delai.setInputType(InputType.TYPE_CLASS_NUMBER);
+        delai.setTextSize(14f);
+        delai.setTextColor(Ui.TEXTE);
+        delai.setGravity(Gravity.CENTER);
+        delai.setBackground(Ui.fond(ctx, Ui.FOND2, 10, Ui.BORD));
+        delai.setPadding(dp(8), dp(8), dp(8), dp(8));
+        delai.setLayoutParams(new LinearLayout.LayoutParams(dp(64), WRAP));
+        ligne.addView(delai);
+        ligne.addView(Ui.texte(ctx, "  s", 14f, Ui.DISCRET, false));
+        c2.addView(ligne);
+        principal = Ui.bouton(ctx, "Lancer", Ui.VERT, this::basculer);
+        c2.addView(principal);
+        addView(c2);
+
+        majEcran();
+    }
+
+    @Override protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        ChercheurIpLocal.observateur = rafraichir;
+        majEcran();
+        postDelayed(tic, 2000);
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        removeCallbacks(tic);
+        if (ChercheurIpLocal.observateur == rafraichir) ChercheurIpLocal.observateur = null;
+        super.onDetachedFromWindow();
+    }
+
+    private TextView puce(String s, boolean actif) {
+        TextView t = Ui.texte(ctx, s, 12f, actif ? Ui.VERT : Ui.TEXTE, false);
+        t.setTypeface(Typeface.MONOSPACE);
+        t.setPadding(dp(10), dp(6), dp(10), dp(6));
+        t.setBackground(actif ? Ui.fond(ctx, 0x3322C55E, 16, Ui.VERT)
+                : Ui.fond(ctx, Ui.FOND2, 16, Ui.BORD));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(WRAP, WRAP);
+        lp.rightMargin = dp(6);
+        lp.bottomMargin = dp(6);
+        t.setLayoutParams(lp);
+        return t;
+    }
+
+    private void majPastille(String s, int couleur) {
+        pastille.setText(s);
+        pastille.setTextColor(couleur);
+        pastille.setBackground(Ui.fond(ctx, (couleur & 0x00FFFFFF) | 0x33000000, 20, 0));
+    }
+
+    private void majEcran() {
+        List<String> l = ChercheurIpLocal.cibles(ChercheurIpLocal.texteSauve(ctx));
+        String ipc = ChercheurIpLocal.ipCourante(ctx);
+        boolean bonne = ipc != null && ChercheurIpLocal.correspond(ipc, l);
+
+        if (ipc == null) {
+            ipVue.setTextSize(18f);
+            ipVue.setText("Hors réseau mobile");
+            ipVue.setTextColor(Ui.DISCRET);
+            majPastille("HORS RÉSEAU", Ui.DISCRET);
+        } else {
+            ipVue.setTextSize(28f);
+            ipVue.setText(ipc);
+            ipVue.setTextColor(bonne ? Ui.VERT : Ui.TEXTE);
+            if (bonne) majPastille("DANS LA LISTE", Ui.VERT);
+            else majPastille("HORS LISTE", Ui.ORANGE);
+        }
+
+        boolean enCours = ChercheurIpLocal.enCours();
+        String e = ChercheurIpLocal.texteEtat;
+        etat.setText(e);
+        etat.setVisibility(enCours ? VISIBLE : GONE);
+        if (e.startsWith(CLE_TROUVE)) {
+            trouveIp.setText(e.substring(CLE_TROUVE.length()));
+            carteTrouve.setVisibility(VISIBLE);
+        } else {
+            carteTrouve.setVisibility(GONE);
+        }
+
+        chips.removeAllViews();
+        if (l.isEmpty()) {
+            TextView vide = puce("Ajouter une adresse", false);
+            vide.setTypeface(Typeface.DEFAULT);
+            vide.setTextColor(Ui.BLEU);
+            vide.setOnClickListener(v -> editerListe());
+            chips.addView(vide);
+        } else {
+            LinearLayout row = null;
+            int w = 0;
+            int max = Math.min(l.size(), 3);
+            for (int i = 0; i < max; i++) {
+                String c = l.get(i);
+                boolean on = ipc != null
+                        && ChercheurIpLocal.correspond(ipc, Collections.singletonList(c));
+                if (row == null || w + c.length() > 24) {
+                    row = new LinearLayout(ctx);
+                    row.setOrientation(HORIZONTAL);
+                    chips.addView(row);
+                    w = 0;
+                }
+                row.addView(puce(c, on));
+                w += c.length() + 3;
+            }
+            if (l.size() > max) {
+                TextView plus = puce("+" + (l.size() - max), false);
+                plus.setOnClickListener(x -> editerListe());
+                row.addView(plus);
+            }
+        }
+
+        principal.setText(enCours ? "Arrêter" : "Lancer");
+        principal.setBackground(Ui.fond(ctx, enCours ? Ui.ROUGE : Ui.VERT, 12, 0));
+    }
+
+    private void basculer() {
+        if (ChercheurIpLocal.enCours()) arreter(); else lancer();
+    }
+
+    private void lancer() {
+        List<String> l = ChercheurIpLocal.cibles(ChercheurIpLocal.texteSauve(ctx));
+        if (l.isEmpty()) {
+            editerListe();
+            return;
+        }
+        if (ChercheurIpLocal.enCours()) return;
+        String ipDeja = ChercheurIpLocal.ipCourante(ctx);
+        if (ipDeja != null && ChercheurIpLocal.correspond(ipDeja, l)) {
+            ChercheurIpLocal.signalerDejaBonne(ipDeja);
+            AlerteIp.declencher(ctx, ipDeja);
+            majEcran();
+            return;
+        }
+        try {
+            ChercheurIpLocal.sauverDelai(ctx,
+                    Math.max(0, Integer.parseInt(delai.getText().toString().trim())));
+        } catch (NumberFormatException ignore) {
+            // valeur par defaut
+        }
+        if (!AvionIp.automatiquePossible(ctx)) {
+            demanderMethode();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 33 && ctx instanceof Activity
+                && ctx.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                != PackageManager.PERMISSION_GRANTED) {
+            ((Activity) ctx).requestPermissions(
+                    new String[]{"android.permission.POST_NOTIFICATIONS"}, 4242);
+        }
+        try {
+            ctx.startForegroundService(new Intent(ctx, RechercheIpService.class)
+                    .putExtra("max", Integer.MAX_VALUE));
+        } catch (RuntimeException e) {
+            T.toast(ctx, "Impossible de démarrer : " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void arreter() {
+        ChercheurIpLocal.arreter();
+        try {
+            ctx.startService(new Intent(ctx, RechercheIpService.class)
+                    .setAction(RechercheIpService.ACTION_STOP));
+        } catch (RuntimeException ignore) {
+            // service deja arrete
+        }
+        majEcran();
+    }
+
+    private void editerListe() {
+        final EditText champ = new EditText(ctx);
+        champ.setText(ChercheurIpLocal.texteSauve(ctx));
+        champ.setHint("Une adresse par ligne\n10.143\n100.72.13.8");
+        champ.setMinLines(6);
+        champ.setMaxLines(12);
+        champ.setGravity(Gravity.TOP | Gravity.START);
+        champ.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        LinearLayout box = new LinearLayout(ctx);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        box.addView(champ, new LinearLayout.LayoutParams(MATCH, WRAP));
+        final AlertDialog d = new AlertDialog.Builder(ctx,
+                android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(T.t("Adresses voulues"))
+                .setView(box)
+                .setPositiveButton(T.t("Enregistrer"), (x, y) -> {
+                    ChercheurIpLocal.sauver(ctx, champ.getText().toString());
+                    majEcran();
+                })
+                .setNegativeButton(T.t("Vider"), null)
+                .setNeutralButton(T.t("Coller"), null)
+                .create();
+        d.setOnShowListener(x -> {
+            d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+                ClipData cd = cm == null ? null : cm.getPrimaryClip();
+                if (cd == null || cd.getItemCount() == 0) {
+                    T.toast(ctx, "Presse-papiers vide", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                CharSequence t = cd.getItemAt(0).coerceToText(ctx);
+                String actuel = champ.getText().toString();
+                champ.setText(actuel.isEmpty() ? t : actuel + "\n" + t);
+            });
+            d.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> champ.setText(""));
+        });
+        try {
+            d.show();
+        } catch (RuntimeException e) {
+            T.toast(ctx, "Impossible d'ouvrir l'éditeur", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void ouvrirReglage(String action) {
+        try {
+            ctx.startActivity(new Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException e) {
+            T.toast(ctx, "Réglage indisponible sur ce téléphone", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void demanderMethode() {
+        try {
+            new AlertDialog.Builder(ctx, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle(T.t("Activer le mode avion automatique"))
+                    .setMessage(T.t("Pour couper et remettre le réseau tout seul, choisis cette appli comme "
+                            + "« Appli d'assistant numérique » par défaut. Si ton téléphone ne la propose "
+                            + "pas, active son service d'accessibilité. Puis reviens et appuie sur Lancer."))
+                    .setPositiveButton(T.t("Choisir l'assistant"),
+                            (x, y) -> ouvrirReglage(Settings.ACTION_VOICE_INPUT_SETTINGS))
+                    .setNegativeButton(T.t("Accessibilité"),
+                            (x, y) -> ouvrirReglage(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    .setNeutralButton(T.t("Annuler"), null)
+                    .show();
+        } catch (RuntimeException e) {
+            ouvrirReglage(Settings.ACTION_VOICE_INPUT_SETTINGS);
+        }
+    }
+}

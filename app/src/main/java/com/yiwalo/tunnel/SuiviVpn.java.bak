@@ -1,0 +1,97 @@
+package com.yiwalo.tunnel;
+
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+public final class SuiviVpn {
+
+    private static EtatVpn etat = EtatVpn.DECONNECTE;
+    private static String message = "";
+    private static long latenceMs = -1;
+    private static long debut = 0;
+
+    private static final List<Runnable> ECOUTEURS = new CopyOnWriteArrayList<>();
+    private static final Handler PRINCIPAL = new Handler(Looper.getMainLooper());
+
+    private SuiviVpn() {
+    }
+
+    public static synchronized EtatVpn etat() {
+        return etat;
+    }
+
+    public static synchronized String message() {
+        return message;
+    }
+
+    /** Latence mesurée en ms, ou -1 si aucune mesure n'a été effectuée. */
+    public static synchronized long latenceMs() {
+        return latenceMs;
+    }
+
+    /** Début de la connexion (SystemClock.elapsedRealtime), ou 0 si non connecté. */
+    public static synchronized long debut() {
+        return debut;
+    }
+
+    private static long cumul = 0;
+
+    /** Durée totale de connexion, coupures de reconnexion exclues. */
+    public static synchronized long dureeMs() {
+        return cumul + (debut > 0 ? SystemClock.elapsedRealtime() - debut : 0);
+    }
+
+    private static long baseRx = -1;
+    private static long baseTx = -1;
+
+    public static synchronized void definirBase(long rx, long tx) {
+        baseRx = rx;
+        baseTx = tx;
+    }
+
+    public static synchronized long baseRx() {
+        return baseRx;
+    }
+
+    public static synchronized long baseTx() {
+        return baseTx;
+    }
+
+    public static synchronized void definirLatence(long ms) {
+        latenceMs = ms;
+    }
+
+    public static synchronized void changer(EtatVpn nouvelEtat, String nouveauMessage) {
+        etat = nouvelEtat;
+        message = nouveauMessage == null ? "" : nouveauMessage;
+        if (nouvelEtat == EtatVpn.CONNECTE) {
+            debut = SystemClock.elapsedRealtime();
+        } else {
+            if (debut > 0) cumul += SystemClock.elapsedRealtime() - debut;
+            if (nouvelEtat == EtatVpn.DECONNECTE) cumul = 0;
+            debut = 0;
+            if (nouvelEtat != EtatVpn.RECONNEXION) {
+                latenceMs = -1;
+            }
+        }
+        notifier();
+    }
+
+    public static void ajouterEcouteur(Runnable ecouteur) {
+        ECOUTEURS.add(ecouteur);
+    }
+
+    public static void retirerEcouteur(Runnable ecouteur) {
+        ECOUTEURS.remove(ecouteur);
+    }
+
+    private static void notifier() {
+        for (Runnable r : ECOUTEURS) {
+            PRINCIPAL.post(r);
+        }
+    }
+}

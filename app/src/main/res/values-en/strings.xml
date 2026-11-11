@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="onglet_accueil">Home</string>
+    <string name="onglet_configurations">Configurations</string>
+    <string name="onglet_abonnements">Subscriptions</string>
+    <string name="onglet_journaux">Logs</string>
+    <string name="onglet_plus">Menu</string>
+    <string name="section_en_cours">Section under development</string>
+    <string name="etat_deconnecte">DISCONNECTED</string>
+    <string name="etat_preparation">PREPARING</string>
+    <string name="etat_connexion">CONNECTING</string>
+    <string name="etat_connecte">CONNECTED</string>
+    <string name="etat_reconnexion">RECONNECTING</string>
+    <string name="etat_erreur">CONNECTION ERROR</string>
+    <string name="bouton_connexion">Connection button</string>
+    <string name="msg_aucune_config">No configuration selected. Add one in the Configurations tab.</string>
+    <string name="carte_titre">Active configuration</string>
+    <string name="carte_aucune">No configuration selected</string>
+    <string name="champ_nom">Name</string>
+    <string name="champ_type">Connection type</string>
+    <string name="champ_serveur">Remote server</string>
+    <string name="champ_port">Port</string>
+    <string name="champ_latence">Latency</string>
+    <string name="champ_recu">Data received</string>
+    <string name="champ_envoye">Data sent</string>
+    <string name="champ_duree">Connection time</string>
+    <string name="valeur_inconnue">—</string>
+    <string name="valeur_non_mesuree">Not measured</string>
+</resources>

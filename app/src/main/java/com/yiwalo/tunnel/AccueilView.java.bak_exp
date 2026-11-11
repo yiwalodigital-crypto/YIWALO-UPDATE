@@ -1,0 +1,456 @@
+package com.yiwalo.tunnel;
+
+import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
+import android.content.Context;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.net.TrafficStats;
+import android.os.Process;
+import android.os.SystemClock;
+import android.text.TextUtils;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import com.yiwalo.tunnel.config.Configuration;
+
+import java.util.Locale;
+
+public class AccueilView extends LinearLayout {
+
+    public interface Actions {
+        void connecter();
+
+        void deconnecter();
+    }
+
+    private final Configuration active;
+    private final Actions actions;
+    private final ImageView bouton;
+    private final TextView texteEtat;
+    private final TextView texteMessage;
+    private final GradientDrawable fondBouton = new GradientDrawable();
+    private TextView valIp;
+    private TextView valLatence;
+    private TextView valDuree;
+    private TextView valRecu;
+    private TextView valEnvoye;
+    private TextView valDebitRecu;
+    private TextView valDebitEnvoye;
+    private ObjectAnimator pulsation;
+    private String messageLocal = "";
+    private long dernierRx = -1;
+    private long dernierTx = -1;
+    private long dernierTemps = 0;
+    private double debitRecu = 0;
+    private double debitEnvoye = 0;
+
+    private final Runnable ecouteur = this::rafraichir;
+    private final Runnable tic = new Runnable() {
+        @Override
+        public void run() {
+            rafraichir();
+            postDelayed(this, 1000);
+        }
+    };
+
+    public AccueilView(Context contexte, Configuration active, Actions actions) {
+        super(contexte);
+        this.active = active;
+        this.actions = actions;
+        setOrientation(VERTICAL);
+        setGravity(Gravity.CENTER_HORIZONTAL);
+        setPadding(dp(16), dp(12), dp(16), dp(12));
+
+        int cote = Math.max(dp(100), Math.min(dp(160),
+                Math.round(getResources().getDisplayMetrics().heightPixels * 0.19f)));
+        int marge = Math.round(cote * 0.28f);
+
+        bouton = new ImageView(contexte);
+        bouton.setImageResource(R.drawable.ic_power);
+        bouton.setPadding(marge, marge, marge, marge);
+        bouton.setContentDescription(contexte.getString(R.string.bouton_connexion));
+        fondBouton.setShape(GradientDrawable.OVAL);
+        fondBouton.setColor(contexte.getColor(R.color.carte));
+        bouton.setBackground(fondBouton);
+        LinearLayout.LayoutParams pBouton = new LinearLayout.LayoutParams(cote, cote);
+        pBouton.topMargin = dp(8);
+        pBouton.bottomMargin = dp(16);
+        addView(bouton, pBouton);
+
+        texteEtat = new TextView(contexte);
+        texteEtat.setTextSize(22f);
+        texteEtat.setGravity(Gravity.CENTER);
+        texteEtat.setTypeface(texteEtat.getTypeface(), Typeface.BOLD);
+        addView(texteEtat);
+
+        texteMessage = new TextView(contexte);
+        texteMessage.setTextSize(14f);
+        texteMessage.setGravity(Gravity.CENTER);
+        texteMessage.setTextColor(contexte.getColor(R.color.texte_discret));
+        texteMessage.setPadding(dp(12), dp(6), dp(12), dp(6));
+        addView(texteMessage);
+
+        View vide = new View(contexte);
+        addView(vide, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        addView(creerTableau(contexte), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        bouton.setOnClickListener(v -> surClic());
+        rafraichir();
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        SuiviVpn.ajouterEcouteur(ecouteur);
+        post(tic);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        SuiviVpn.retirerEcouteur(ecouteur);
+        removeCallbacks(tic);
+        animer(false);
+        super.onDetachedFromWindow();
+    }
+
+    private void surClic() {
+        EtatVpn etat = SuiviVpn.etat();
+        if (etat == EtatVpn.DECONNECTE || etat == EtatVpn.ERREUR) {
+            if (active == null) {
+                messageLocal = getContext().getString(R.string.acc_import_invite);
+                rafraichir();
+            } else {
+                messageLocal = "";
+                actions.connecter();
+            }
+        } else {
+            actions.deconnecter();
+        }
+    }
+
+    private void rafraichir() {
+        Context contexte = getContext();
+        EtatVpn etat = SuiviVpn.etat();
+        int couleur;
+        switch (etat) {
+            case CONNECTE:
+                couleur = contexte.getColor(R.color.vert);
+                break;
+            case ERREUR:
+                couleur = contexte.getColor(R.color.rouge);
+                break;
+            case DECONNECTE:
+                couleur = contexte.getColor(R.color.texte_discret);
+                break;
+            default:
+                couleur = contexte.getColor(R.color.bleu);
+                break;
+        }
+        fondBouton.setStroke(dp(4), couleur);
+        bouton.setColorFilter(couleur);
+        texteEtat.setText(etat.libelle);
+        texteEtat.setTextColor(couleur);
+        animer(etat == EtatVpn.PREPARATION || etat == EtatVpn.CONNEXION
+                || etat == EtatVpn.RECONNEXION);
+
+        if (etat != EtatVpn.DECONNECTE && etat != EtatVpn.ERREUR) {
+            messageLocal = "";
+        }
+        String message = SuiviVpn.message();
+        String defaut = "";
+        if (etat == EtatVpn.DECONNECTE) {
+            defaut = contexte.getString(active == null
+                    ? R.string.acc_import_invite : R.string.acc_pret);
+        }
+        texteMessage.setText(!message.isEmpty() ? message
+                : (!messageLocal.isEmpty() ? messageLocal : defaut));
+
+        String tiret = contexte.getString(R.string.valeur_inconnue);
+        String ip = ReseauLocal.ipLocale(contexte);
+        {
+            String nomRes = nomReseauDonnees(contexte);
+            String ipTxt = ip != null ? ip : contexte.getString(R.string.valeur_non_disponible);
+            android.text.SpannableString sp = new android.text.SpannableString(nomRes + "  " + ipTxt);
+            sp.setSpan(new android.text.style.ForegroundColorSpan(0xFF22D3EE),
+                    0, nomRes.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sp.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                    0, nomRes.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sp.setSpan(new android.text.style.ForegroundColorSpan(0xFF4ADE80),
+                    nomRes.length() + 2, sp.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            valIp.setText(sp);
+        }
+
+        if (etat == EtatVpn.CONNECTE) {
+            long latence = SuiviVpn.latenceMs();
+            if (latence >= 0) {
+                valLatence.setText(latence + " ms");
+                valLatence.setTextColor(couleurLatence(latence));
+            } else {
+                valLatence.setText(R.string.valeur_non_mesuree);
+                valLatence.setTextColor(contexte.getColor(R.color.orange));
+            }
+
+            int uid = Process.myUid();
+            long rx = TrafficStats.getUidRxBytes(uid);
+            long tx = TrafficStats.getUidTxBytes(uid);
+            valRecu.setText(octets(rx, SuiviVpn.baseRx()));
+            valEnvoye.setText(octets(tx, SuiviVpn.baseTx()));
+
+            long maintenant = SystemClock.elapsedRealtime();
+            if (rx != TrafficStats.UNSUPPORTED && tx != TrafficStats.UNSUPPORTED) {
+                if (dernierTemps == 0) {
+                    dernierRx = rx;
+                    dernierTx = tx;
+                    dernierTemps = maintenant;
+                } else if (maintenant - dernierTemps >= 800) {
+                    double secondes = (maintenant - dernierTemps) / 1000.0;
+                    debitRecu = Math.max(0, rx - dernierRx) / secondes;
+                    debitEnvoye = Math.max(0, tx - dernierTx) / secondes;
+                    dernierRx = rx;
+                    dernierTx = tx;
+                    dernierTemps = maintenant;
+                }
+                valDebitRecu.setText(debit(debitRecu));
+                valDebitEnvoye.setText(debit(debitEnvoye));
+            } else {
+                String nd = contexte.getString(R.string.valeur_non_disponible);
+                valDebitRecu.setText(nd);
+                valDebitEnvoye.setText(nd);
+            }
+            long s = Math.max(0, (SystemClock.elapsedRealtime() - SuiviVpn.debut()) / 1000);
+            valDuree.setText(String.format(Locale.FRANCE, "%02d:%02d:%02d",
+                    s / 3600, (s % 3600) / 60, s % 60));
+        } else {
+            dernierTemps = 0;
+            debitRecu = 0;
+            debitEnvoye = 0;
+            valLatence.setText(tiret);
+            valLatence.setTextColor(contexte.getColor(R.color.vert));
+            valRecu.setText(tiret);
+            valEnvoye.setText(tiret);
+            valDebitRecu.setText(tiret);
+            valDebitEnvoye.setText(tiret);
+            valDuree.setText(tiret);
+        }
+    }
+
+    private int couleurLatence(long ms) {
+        Context contexte = getContext();
+        if (ms < 300) {
+            return contexte.getColor(R.color.vert);
+        }
+        if (ms < 800) {
+            return contexte.getColor(R.color.orange);
+        }
+        return contexte.getColor(R.color.rouge);
+    }
+
+    private String octets(long actuel, long base) {
+        if (actuel == TrafficStats.UNSUPPORTED || base < 0) {
+            return getContext().getString(R.string.valeur_non_disponible);
+        }
+        long n = Math.max(0, actuel - base);
+        if (n < 1024) {
+            return n + " o";
+        }
+        double v = n / 1024.0;
+        if (v < 1024) {
+            return String.format(Locale.FRANCE, "%.1f Ko", v);
+        }
+        v /= 1024.0;
+        if (v < 1024) {
+            return String.format(Locale.FRANCE, "%.1f Mo", v);
+        }
+        return String.format(Locale.FRANCE, "%.2f Go", v / 1024.0);
+    }
+
+    private String debit(double octetsParSeconde) {
+        if (octetsParSeconde < 1024) {
+            return String.format(Locale.FRANCE, "%.0f o/s", octetsParSeconde);
+        }
+        double v = octetsParSeconde / 1024.0;
+        if (v < 1024) {
+            return String.format(Locale.FRANCE, "%.1f Ko/s", v);
+        }
+        return String.format(Locale.FRANCE, "%.2f Mo/s", v / 1024.0);
+    }
+
+    private void animer(boolean actif) {
+        if (actif) {
+            if (pulsation == null) {
+                pulsation = ObjectAnimator.ofFloat(bouton, View.ALPHA, 1f, 0.35f);
+                pulsation.setDuration(800);
+                pulsation.setRepeatCount(ValueAnimator.INFINITE);
+                pulsation.setRepeatMode(ValueAnimator.REVERSE);
+            }
+            if (!pulsation.isRunning()) {
+                pulsation.start();
+            }
+        } else {
+            if (pulsation != null) {
+                pulsation.cancel();
+                pulsation = null;
+            }
+            bouton.setAlpha(1f);
+        }
+    }
+
+    private LinearLayout creerTableau(Context contexte) {
+        LinearLayout tableau = new LinearLayout(contexte);
+        tableau.setOrientation(VERTICAL);
+        tableau.setPadding(dp(4), dp(4), dp(4), dp(4));
+        GradientDrawable fond = new GradientDrawable();
+        fond.setColor(contexte.getColor(R.color.carte));
+        fond.setCornerRadius(dp(16));
+        tableau.setBackground(fond);
+
+        valIp = ajouterCellule(nouvelleLigne(tableau), R.string.champ_ip,
+                contexte.getColor(R.color.bleu_clair));
+
+        LinearLayout ligne2 = nouvelleLigne(tableau);
+        valLatence = ajouterCellule(ligne2, R.string.champ_latence,
+                contexte.getColor(R.color.vert));
+        valDuree = ajouterCellule(ligne2, R.string.champ_duree,
+                contexte.getColor(R.color.violet_clair));
+
+        LinearLayout ligne3 = nouvelleLigne(tableau);
+        valRecu = ajouterCellule(ligne3, R.string.champ_recu, contexte.getColor(R.color.cyan));
+        valEnvoye = ajouterCellule(ligne3, R.string.champ_envoye,
+                contexte.getColor(R.color.orange));
+
+        LinearLayout ligne4 = nouvelleLigne(tableau);
+        valDebitRecu = ajouterCellule(ligne4, R.string.champ_debit_recu,
+                contexte.getColor(R.color.cyan));
+        valDebitEnvoye = ajouterCellule(ligne4, R.string.champ_debit_envoye,
+                contexte.getColor(R.color.orange));
+        return tableau;
+    }
+
+    private LinearLayout nouvelleLigne(LinearLayout tableau) {
+        Context contexte = tableau.getContext();
+        if (tableau.getChildCount() > 0) {
+            View separateur = new View(contexte);
+            separateur.setBackgroundColor(contexte.getColor(R.color.fond));
+            tableau.addView(separateur, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        }
+        LinearLayout ligne = new LinearLayout(contexte);
+        ligne.setOrientation(HORIZONTAL);
+        tableau.addView(ligne, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return ligne;
+    }
+
+    private TextView ajouterCellule(LinearLayout ligne, int libelle, int couleur) {
+        Context contexte = ligne.getContext();
+        if (ligne.getChildCount() > 0) {
+            View separateur = new View(contexte);
+            separateur.setBackgroundColor(contexte.getColor(R.color.fond));
+            ligne.addView(separateur, new LinearLayout.LayoutParams(
+                    dp(1), ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        LinearLayout cellule = new LinearLayout(contexte);
+        cellule.setOrientation(VERTICAL);
+        cellule.setGravity(Gravity.CENTER);
+        cellule.setPadding(dp(6), dp(10), dp(6), dp(10));
+
+        TextView etiquette = new TextView(contexte);
+        etiquette.setText(libelle);
+        etiquette.setTextSize(11f);
+        etiquette.setTextColor(contexte.getColor(R.color.texte_discret));
+        etiquette.setGravity(Gravity.CENTER);
+        cellule.addView(etiquette);
+
+        TextView valeur = new TextView(contexte);
+        valeur.setTextSize(17f);
+        valeur.setTextColor(couleur);
+        valeur.setTypeface(valeur.getTypeface(), Typeface.BOLD);
+        valeur.setGravity(Gravity.CENTER);
+        valeur.setSingleLine(true);
+        valeur.setEllipsize(TextUtils.TruncateAt.END);
+        cellule.addView(valeur);
+
+        ligne.addView(cellule, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        return valeur;
+    }
+
+    private int dp(int valeur) {
+        return Math.round(valeur * getResources().getDisplayMetrics().density);
+    }
+
+    private static String nomReseau(Context ctx) {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                    ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            android.net.Network r = cm.getActiveNetwork();
+            android.net.NetworkCapabilities nc = r == null ? null : cm.getNetworkCapabilities(r);
+            if (nc != null && nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) {
+                return "Wi-Fi";
+            }
+            android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager)
+                    ctx.getSystemService(Context.TELEPHONY_SERVICE);
+            String op = tm == null ? "" : tm.getNetworkOperatorName();
+            if (op == null || op.trim().isEmpty() || op.trim().matches("\\d+")) {
+                op = tm == null ? "" : tm.getSimOperatorName();
+            }
+            if (op == null || op.trim().isEmpty() || op.trim().matches("\\d+")) {
+                String code = tm == null ? "" : tm.getNetworkOperator();
+                if ("61301".equals(code)) {
+                    return "Orange BF";
+                }
+                return "Réseau mobile";
+            }
+            return op.trim();
+        } catch (RuntimeException ignore) {
+            // nom indisponible
+        }
+        return "Réseau mobile";
+    }
+
+    private static String nomReseauDonnees(Context ctx) {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                    ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            for (android.net.Network n : cm.getAllNetworks()) {
+                android.net.NetworkCapabilities nc = cm.getNetworkCapabilities(n);
+                if (nc != null
+                        && nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                        && !nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) {
+                    return "Wi-Fi";
+                }
+            }
+            android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager)
+                    ctx.getSystemService(Context.TELEPHONY_SERVICE);
+            if (tm == null) {
+                return "Réseau mobile";
+            }
+            int id = android.telephony.SubscriptionManager.getDefaultDataSubscriptionId();
+            if (id != android.telephony.SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                tm = tm.createForSubscriptionId(id);
+            }
+            String op = tm.getNetworkOperatorName();
+            if (op == null || op.trim().isEmpty() || op.trim().matches("\\d+")) {
+                op = tm.getSimOperatorName();
+            }
+            if (op == null || op.trim().isEmpty() || op.trim().matches("\\d+")) {
+                String code = tm.getNetworkOperator();
+                if ("61301".equals(code)) return "Moov Africa BF";
+                if ("61302".equals(code)) return "Orange BF";
+                if ("61303".equals(code)) return "Telecel Faso";
+                return "Réseau mobile";
+            }
+            return op.trim();
+        } catch (RuntimeException ignore) {
+            return "Réseau mobile";
+        }
+    }
+}

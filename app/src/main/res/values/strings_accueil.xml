@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="acc_importer">Importer une configuration</string>
+    <string name="acc_choisir">Choisir une configuration</string>
+    <string name="acc_journaux">Journaux techniques</string>
+    <string name="acc_choisir_titre">Choisir une configuration</string>
+    <string name="acc_deconnecter_d_abord">Déconnectez-vous d’abord pour changer de configuration.</string>
+    <string name="acc_aucune_config">Aucune configuration. Importez-en une.</string>
+    <string name="acc_import_invite">Aucune configuration. Copiez votre lien, puis touchez « Importer une configuration ».</string>
+    <string name="acc_import_pret">Elle est sélectionnée : touchez le grand bouton pour vous connecter.</string>
+    <string name="acc_pret">Prêt à se connecter.</string>
+    <string name="champ_debit_recu">Débit reçu</string>
+    <string name="champ_debit_envoye">Débit envoyé</string>
+    <string name="journal_rapport">Rapport</string>
+    <string name="journal_rapport_copie">Rapport de diagnostic copié.</string>
+</resources>

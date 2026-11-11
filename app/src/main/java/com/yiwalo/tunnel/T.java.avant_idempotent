@@ -1,0 +1,347 @@
+package com.yiwalo.tunnel;
+
+import android.os.Handler;
+import android.os.Looper;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.TextView;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public final class T {
+    public static boolean en = false;
+    private static final Map<String, String> M = new HashMap<>();
+    private static final Map<String, String> PLUS = new HashMap<>();
+    private static final java.util.List<Map.Entry<String, String>> FRAG = new java.util.ArrayList<>();
+    private static final Map<String, String> CACHE = new HashMap<>();
+
+    private T() { }
+
+    private static void p(String fr, String an) {
+        M.put(fr, an);
+    }
+
+    static {
+        p("Accueil", "Home");
+        p("Profils", "Profiles");
+        p("Abonnements", "Subscriptions");
+        p("Réglages", "Settings");
+        p("Paramètres", "Settings");
+        p("OUTILS", "TOOLS");
+        p("Vérification IP", "IP verification");
+        p("Consommation des données", "Data usage");
+        p("Consommation de données", "Data usage");
+        p("Test de vitesse", "Speed test");
+        p("Testeur de ports", "Port tester");
+        p("Tunnel par application", "Per-app tunnel");
+        p("Rechercher une application", "Search an app");
+        p("Toutes les applications", "All apps");
+        p("Exclure les applications cochées", "Exclude checked apps");
+        p("Seulement les applications cochées", "Only checked apps");
+        p("Chargement des applications…", "Loading apps…");
+        p("Aucune application trouvée.", "No app found.");
+        p("Test de fuite DNS", "DNS leak test");
+        p("Lancer le test", "Run the test");
+        p("Relancer le test", "Run the test again");
+        p("Test en cours…", "Test in progress…");
+        p("DNS protégé", "DNS protected");
+        p("Fuite DNS détectée", "DNS leak detected");
+        p("Tunnel non connecté", "Tunnel not connected");
+        p("Test peu fiable", "Unreliable test");
+        p("Test impossible", "Test impossible");
+        p("Comparaison impossible", "Comparison impossible");
+        p("ID de l’appareil", "Device ID");
+        p("Partager l’application", "Share the app");
+        p("À propos", "About");
+        p("Latence", "Latency");
+        p("Réception", "Download");
+        p("Téléchargement", "Download");
+        p("TÉLÉCHARGEMENT", "DOWNLOAD");
+        p("Envoi", "Upload");
+        p("Résultat", "Result");
+        p("Terminé", "Done");
+        p("Refaire le test", "Run again");
+        p("HISTORIQUE", "HISTORY");
+        p("GIGUE", "JITTER");
+        p("Via le VPN", "Via the VPN");
+        p("Journaux", "Logs");
+        p("Actualiser", "Refresh");
+        p("Copier", "Copy");
+        p("Rapport", "Report");
+        p("Effacer", "Clear");
+        p("Créer un fichier .YL", "Create a .YL file");
+        p("Message pour les utilisateurs (facultatif)", "Message for users (optional)");
+        p("ID(s) appareil (facultatif, séparés par une virgule)", "Device ID(s) (optional, comma-separated)");
+        p("ADRESSES À RECHERCHER", "ADDRESSES TO SEARCH");
+        p("ARRÊTÉ", "STOPPED");
+        p("Accessibilité", "Accessibility");
+        p("Activer le mode avion automatique", "Enable automatic airplane mode");
+        p("Adresse IP", "IP address");
+        p("Adresse du serveur", "Server address");
+        p("Adresses voulues", "Wanted addresses");
+        p("Ajouter SlowDNS", "Add SlowDNS");
+        p("Ajouter une adresse", "Add an address");
+        p("Alerte de quota", "Quota alert");
+        p("Alertes de quota", "Quota alerts");
+        p("Arrêter la recherche", "Stop search");
+        p("Arrêter", "Stop");
+        p("Autoriser l’accès", "Allow access");
+        p("Autoriser un certificat non vérifié", "Allow an unverified certificate");
+        p("Bloquer les appareils rootés", "Block rooted devices");
+        p("Bloqué", "Blocked");
+        p("Bonne connexion", "Good connection");
+        p("Ce mois-ci", "This month");
+        p("Cette semaine", "This week");
+        p("30 derniers jours", "Last 30 days");
+        p("Session actuelle", "Current session");
+        p("Choisir l'assistant", "Choose the assistant");
+        p("Configuration expirée", "Configuration expired");
+        p("Configuration protégée", "Protected configuration");
+        p("Configuration verrouillée", "Locked configuration");
+        p("Configuration renouvelée", "Configuration renewed");
+        p("Configuration ajoutée", "Configuration added");
+        p("Configuration déjà présente", "Configuration already present");
+        p("Connexion TCP", "TCP connection");
+        p("Connexion au tunnel", "Tunnel connection");
+        p("Connexion en cours…", "Connecting…");
+        p("Copier dans le presse-papiers", "Copy to clipboard");
+        p("Copier le rapport", "Copy report");
+        p("Copier l’IP", "Copy IP");
+        p("Copié", "Copied");
+        p("DANS LA LISTE", "IN THE LIST");
+        p("HORS LISTE", "NOT IN THE LIST");
+        p("HORS RÉSEAU", "OFFLINE");
+        p("Date et heure d'expiration (facultatif)", "Expiry date and time (optional)");
+        p("Domaine NS", "NS domain");
+        p("Donne un nom au fichier", "Give the file a name");
+        p("Données mobiles", "Mobile data");
+        p("Durée", "Duration");
+        p("EXPIRÉ", "EXPIRED");
+        p("En attente", "Waiting");
+        p("Enregistré", "Saved");
+        p("FAI :", "ISP:");
+        p("Faire confiance à ce serveur ?", "Trust this server?");
+        p("Faire confiance", "Trust");
+        p("Fichier enregistré", "File saved");
+        p("Groupe WhatsApp", "WhatsApp group");
+        p("Support WhatsApp", "WhatsApp support");
+        p("HÔTE OU ADRESSE IP", "HOST OR IP ADDRESS");
+        p("HÔTE À TESTER", "HOST TO TEST");
+        p("Hôte OK", "Host OK");
+        p("ID appareil", "Device ID");
+        p("ID copié", "ID copied");
+        p("IP ACTUELLE", "CURRENT IP");
+        p("IP TROUVÉE", "IP FOUND");
+        p("IP VOULUE TROUVÉE", "WANTED IP FOUND");
+        p("IP copiée", "IP copied");
+        p("IP publique", "Public IP");
+        p("IP non disponible", "IP unavailable");
+        p("Idéal pour essayer", "Great to try");
+        p("Importer un fichier", "Import a file");
+        p("Lancer la recherche", "Start search");
+        p("Lancer le ping", "Run ping");
+        p("Limite par jour", "Daily limit");
+        p("Limite par mois", "Monthly limit");
+        p("Meilleur prix", "Best price");
+        p("Mesure en cours…", "Measuring…");
+        p("Mesurer le débit", "Measure speed");
+        p("Mode clair", "Light mode");
+        p("Mode sombre", "Dark mode");
+        p("Modifier Shadowsocks", "Edit Shadowsocks");
+        p("Modifier la configuration SlowDNS", "Edit SlowDNS configuration");
+        p("Mot de passe (facultatif)", "Password (optional)");
+        p("Mot de passe SSH", "SSH password");
+        p("Mot de passe", "Password");
+        p("NON CONNECTÉ", "NOT CONNECTED");
+        p("Nom de la configuration", "Configuration name");
+        p("Nom du fichier de configuration", "Configuration file name");
+        p("Non testable", "Cannot be tested");
+        p("Non testé", "Not tested");
+        p("Nouvelle configuration SlowDNS", "New SlowDNS configuration");
+        p("Nouvelle recherche", "New search");
+        p("Opérateur inconnu", "Unknown operator");
+        p("PAR RÉSEAU", "BY NETWORK");
+        p("Paramètres du lien", "Link settings");
+        p("Partager la configuration", "Share configuration");
+        p("Pause entre essais", "Pause between attempts");
+        p("Pays :", "Country:");
+        p("Région :", "Region:");
+        p("Ville :", "City:");
+        p("Ping des configurations", "Configuration ping");
+        p("Ping des serveurs", "Server ping");
+        p("Ping et débit", "Ping and speed");
+        p("Port SSH", "SSH port");
+        p("Presse-papiers vide", "Clipboard empty");
+        p("Prêt", "Ready");
+        p("RECHERCHE EN COURS", "SEARCH IN PROGRESS");
+        p("Rapport copié", "Report copied");
+        p("Rapport ping", "Ping report");
+        p("Recherche arrêtée", "Search stopped");
+        p("Recherche arrêtée.", "Search stopped.");
+        p("Recherche d'IP", "IP search");
+        p("Recherche d'IP en cours", "IP search in progress");
+        p("Recherche démarrée", "Search started");
+        p("Recherche en cours…", "Searching…");
+        p("Rejoindre la communauté", "Join the community");
+        p("Réessayer", "Retry");
+        p("Réponse HTTPS", "HTTPS response");
+        p("Réseau de données mobiles uniquement", "Mobile data network only");
+        p("Réseau mobile", "Mobile network");
+        p("Réseau par défaut", "Default network");
+        p("Réseau", "Network");
+        p("Résolution DNS", "DNS resolution");
+        p("Résolveur DNS", "DNS resolver");
+        p("SERVEUR À TESTER", "SERVER TO TEST");
+        p("Scanner les ports", "Scan ports");
+        p("Scanner à nouveau", "Scan again");
+        p("Se connecter", "Connect");
+        p("Supprimer les échecs", "Delete failures");
+        p("Supprimer", "Delete");
+        p("TEST DE DÉBIT", "SPEED TEST");
+        p("Terminé sans trouver d'IP voulue", "Finished without finding a wanted IP");
+        p("Test en cours…", "Testing…");
+        p("Test arrêté.", "Test stopped.");
+        p("Touche la ligne pour le copier.", "Tap the line to copy it.");
+        p("Utilisateur SSH", "SSH user");
+        p("Verrouiller la configuration", "Lock the configuration");
+        p("Voir la consommation de tout le téléphone", "View usage of the whole phone");
+        p("Échec", "Failed");
+        p("Échec de l'enregistrement", "Save failed");
+        p("↑ ENVOYÉ", "↑ SENT");
+        p("↓ REÇU", "↓ RECEIVED");
+        p("↻  Refaire le test", "↻  Run again");
+        p("↻  Réessayer", "↻  Retry");
+        p("■  Arrêter", "■  Stop");
+        p("▶  Démarrer le test", "▶  Start test");
+        p("▶  Redémarrer le test", "▶  Restart test");
+        p("‹  Retour", "‹  Back");
+        p("Wi-Fi + données mobiles", "Wi-Fi + mobile data");
+        p("Hors réseau mobile", "Off mobile network");
+        p("Aucune connexion", "No connection");
+        p("Aucune configuration", "No configuration");
+        p("Aucune configuration.", "No configuration.");
+        p("Aucune configuration sélectionnée.", "No configuration selected.");
+        p("Adresse ou IP (ex. 1.1.1.1)", "Address or IP (e.g. 1.1.1.1)");
+        p("ex. google.com ou serveur.com:443", "e.g. google.com or server.com:443");
+        p("exemple.com ou 1.1.1.1", "example.com or 1.1.1.1");
+        p("Clé publique du serveur", "Server public key");
+        p("Hôte introuvable", "Host not found");
+        p("Réseau injoignable", "Network unreachable");
+        p("Délai dépassé", "Timed out");
+        p("Pas de réponse HTTPS", "No HTTPS response");
+        p("Résolution…", "Resolving…");
+        p("Tunnel connecté : IP vue par le serveur", "Tunnel connected: IP seen by the server");
+        p("Tunnel inactif : IP directe de l’appareil", "Tunnel inactive: device's direct IP");
+        p("Aucune donnée reçue.", "No data received.");
+        p("Aucun port ouvert", "No open port");
+        p("0 port ouvert", "0 open ports");
+        p("Importer", "Import");
+        p("Annuler", "Cancel");
+        p("Enregistrer", "Save");
+        p("Modifier", "Edit");
+        p("Active", "Active");
+        TMore.remplir(PLUS);
+        M.putAll(PLUS);
+        for (Map.Entry<String, String> e : PLUS.entrySet()) {
+            String k = e.getKey();
+            boolean bord = k.startsWith(" ") || k.endsWith(" ");
+            if (k.length() >= 6 || (bord && k.trim().length() >= 3)) FRAG.add(e);
+        }
+        java.util.Collections.sort(FRAG, (x, y) -> y.getKey().length() - x.getKey().length());
+    }
+
+    /** Lit la langue choisie (utile hors de l'écran principal : service VPN, notifications). */
+    public static void init(android.content.Context c) {
+        try {
+            en = "en".equals(c.getSharedPreferences("yiwalo_apparence",
+                    android.content.Context.MODE_PRIVATE).getString("langue", "fr"));
+        } catch (RuntimeException ignore) { }
+    }
+
+    /** Contexte dont les ressources suivent la langue choisie dans les Réglages. */
+    public static android.content.Context contexte(android.content.Context base) {
+        try {
+            android.content.SharedPreferences p = base.getSharedPreferences(
+                    "yiwalo_apparence", android.content.Context.MODE_PRIVATE);
+            java.util.Locale loc = new java.util.Locale(p.getString("langue", "fr"));
+            android.content.res.Configuration cfg =
+                    new android.content.res.Configuration(base.getResources().getConfiguration());
+            cfg.setLocale(loc);
+            return base.createConfigurationContext(cfg);
+        } catch (RuntimeException e) {
+            return base;
+        }
+    }
+
+    public static android.widget.Toast toast(android.content.Context c, CharSequence texte, int duree) {
+        return android.widget.Toast.makeText(c, t(texte), duree);
+    }
+
+    public static android.widget.Toast toast(android.content.Context c, int ressource, int duree) {
+        return android.widget.Toast.makeText(c, ressource, duree);
+    }
+
+    public static int t(int ressource) {
+        return ressource;
+    }
+
+    public static CharSequence t(CharSequence s) {
+        return s == null ? null : t(s.toString());
+    }
+
+    public static String t(String s) {
+        if (!en || s == null || s.isEmpty()) return s;
+        String r = M.get(s);
+        if (r != null) return r;
+        synchronized (CACHE) {
+            r = CACHE.get(s);
+            if (r != null) return r;
+            r = s;
+            for (Map.Entry<String, String> e : FRAG) {
+                if (r.contains(e.getKey())) r = r.replace(e.getKey(), e.getValue());
+            }
+            if (CACHE.size() > 3000) CACHE.clear();
+            CACHE.put(s, r);
+        }
+        return r;
+    }
+
+    static void traduire(View v) {
+        if (v instanceof TextView) {
+            TextView tv = (TextView) v;
+            if (!(v instanceof EditText)) {
+                CharSequence c = tv.getText();
+                if (c != null && c.length() > 0 && c.length() < 4000
+                        && !(c instanceof android.text.Spanned)) {
+                    String s = c.toString();
+                    String r = t(s);
+                    if (!r.equals(s)) tv.setText(r);
+                }
+            }
+            CharSequence h = tv.getHint();
+            if (h != null && h.length() > 0) {
+                String s = h.toString();
+                String r = t(s);
+                if (!r.equals(s)) tv.setHint(r);
+            }
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) traduire(g.getChildAt(i));
+        }
+    }
+
+    static void demarrer(final View racine) {
+        if (!en || racine == null) return;
+        final Handler h = new Handler(Looper.getMainLooper());
+        h.post(new Runnable() {
+            @Override public void run() {
+                if (!racine.isAttachedToWindow()) return;
+                traduire(racine);
+                h.postDelayed(this, 400);
+            }
+        });
+    }
+}

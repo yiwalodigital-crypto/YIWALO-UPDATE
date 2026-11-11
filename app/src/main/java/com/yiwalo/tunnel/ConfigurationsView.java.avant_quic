@@ -1,0 +1,653 @@
+package com.yiwalo.tunnel;
+
+import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.PopupMenu;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.yiwalo.tunnel.config.ConfigStore;
+import com.yiwalo.tunnel.config.TypeConnexion;
+import com.yiwalo.tunnel.config.Configuration;
+import com.yiwalo.tunnel.config.ImportateurLiens;
+
+import java.util.List;
+
+public class ConfigurationsView extends LinearLayout {
+    Runnable surPing;
+
+    private final ConfigStore store;
+    private final LinearLayout liste;
+
+    public ConfigurationsView(Context contexte, ConfigStore store) {
+        super(contexte);
+        this.store = store;
+        setOrientation(VERTICAL);
+
+        LinearLayout entete = new LinearLayout(contexte);
+        entete.setGravity(Gravity.CENTER_VERTICAL);
+        entete.setPadding(dp(16), dp(8), dp(16), dp(8));
+
+        TextView titre = new TextView(contexte);
+        titre.setText(R.string.onglet_configurations);
+        titre.setTextSize(20f);
+        titre.setTextColor(contexte.getColor(R.color.texte));
+        titre.setTypeface(titre.getTypeface(), Typeface.BOLD);
+        entete.addView(titre, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        ImageView plus = new ImageView(contexte);
+        plus.setImageResource(R.drawable.ic_ajouter);
+        plus.setPadding(dp(10), dp(10), dp(10), dp(10));
+        plus.setContentDescription(contexte.getString(R.string.cfg_ajouter_desc));
+        GradientDrawable fondPlus = new GradientDrawable();
+        fondPlus.setShape(GradientDrawable.OVAL);
+        fondPlus.setColor(contexte.getColor(R.color.bleu));
+        plus.setBackground(fondPlus);
+        plus.setOnClickListener(this::ouvrirMenu);
+        android.widget.TextView ping = new android.widget.TextView(contexte);
+        ping.setText("Ping");
+        ping.setTextSize(14);
+        ping.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        ping.setTextColor(contexte.getColor(R.color.bleu_clair));
+        ping.setPadding(dp(10), dp(8), dp(10), dp(8));
+        ping.setOnClickListener(v -> { if (surPing != null) surPing.run(); });
+        entete.addView(ping, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(44)));
+        entete.addView(plus, new LinearLayout.LayoutParams(dp(44), dp(44)));
+
+        addView(entete, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        ScrollView defilement = new ScrollView(contexte);
+        liste = new LinearLayout(contexte);
+        liste.setOrientation(VERTICAL);
+        liste.setPadding(dp(16), dp(8), dp(16), dp(16));
+        defilement.addView(liste, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        addView(defilement, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        rafraichir();
+    }
+
+    private void ouvrirMenu(View ancre) {
+        PopupMenu menu = new PopupMenu(getContext(), ancre);
+        menu.getMenu().add(0, 1, 0, R.string.cfg_menu_presse_papiers);
+        menu.getMenu().add(0, 2, 1, R.string.cfg_menu_coller);
+        menu.getMenu().add(0, 3, 2, "Importer un fichier");
+        menu.getMenu().add(0, 4, 3, "Ajouter SlowDNS");
+        menu.setOnMenuItemClickListener(item -> {
+            if (item.getItemId() == 4) {
+                FormulaireSlowDns.ouvrir(getContext(), store, null, this::rafraichir);
+            } else if (item.getItemId() == 3) {
+                importerFichier();
+            } else if (item.getItemId() == 1) {
+                importerPressePapiers();
+            } else {
+                afficherSaisie();
+            }
+            return true;
+        });
+        menu.show();
+    }
+
+    private void importerPressePapiers() {
+        Context contexte = getContext();
+        ClipboardManager cm = (ClipboardManager) contexte.getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipData clip = cm == null ? null : cm.getPrimaryClip();
+        CharSequence texte = (clip != null && clip.getItemCount() > 0)
+                ? clip.getItemAt(0).coerceToText(contexte) : null;
+        if (texte == null || texte.toString().trim().isEmpty()) {
+            Toast.makeText(contexte, R.string.cfg_presse_vide, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        traiter(texte.toString());
+    }
+
+    public void afficherSaisie() {
+        Context contexte = getContext();
+        EditText saisie = new EditText(contexte);
+        saisie.setHint(R.string.cfg_coller_indice);
+        saisie.setMinLines(5);
+        saisie.setGravity(Gravity.TOP | Gravity.START);
+        saisie.setPadding(dp(16), dp(12), dp(16), dp(12));
+        new AlertDialog.Builder(contexte)
+                .setTitle(R.string.cfg_coller_titre)
+                .setView(saisie)
+                .setPositiveButton(R.string.cfg_importer,
+                        (d, w) -> traiter(saisie.getText().toString()))
+                .setNegativeButton(R.string.cfg_annuler, null)
+                .show();
+    }
+
+    public void traiter(String texte) {
+        if (texte != null && PartageConfig.estCode(texte)) {
+            traiterYiwalo(texte);
+            return;
+        }
+        Context contexte = getContext();
+        ImportateurLiens.Resultat r = ImportateurLiens.importer(texte);
+        int ajoutees = 0;
+        int doublons = 0;
+        for (Configuration c : r.configurations) {
+            if (store.ajouter(c)) {
+                ajoutees++;
+                store.selectionner(c.id);
+            } else {
+                doublons++;
+            }
+        }
+        rafraichir();
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(contexte.getString(R.string.cfg_ajoutees, ajoutees));
+        if (ajoutees > 0) {
+            sb.append("\n").append(contexte.getString(R.string.cfg_selectionnee));
+        }
+        if (doublons > 0) {
+            sb.append("\n").append(contexte.getString(R.string.cfg_doublons, doublons));
+        }
+        if (!r.erreurs.isEmpty()) {
+            sb.append("\n\n").append(contexte.getString(R.string.cfg_erreurs));
+            for (String e : r.erreurs) {
+                sb.append("\n• ").append(e);
+            }
+        }
+        AlertDialog.Builder resultatDialogue = new AlertDialog.Builder(contexte)
+                .setTitle(R.string.cfg_resultat_titre)
+                .setMessage(sb.toString())
+                .setNegativeButton(R.string.cfg_ok, null);
+        if (ajoutees > 0 && contexte instanceof MainActivity) {
+            resultatDialogue.setPositiveButton(R.string.cfg_aller_accueil,
+                    (d, w) -> ((MainActivity) contexte).allerAccueil());
+        }
+        String msgToast = (ajoutees > 0 && doublons == 0 && r.erreurs.isEmpty()) ? contexte.getString(R.string.cfg_ajoutees, ajoutees) : sb.toString();
+        android.widget.Toast.makeText(contexte, msgToast, android.widget.Toast.LENGTH_LONG).show();
+    }
+
+    private void rafraichir() {
+        Context contexte = getContext();
+        liste.removeAllViews();
+        List<Configuration> configurations = store.lister();
+        Configuration active = store.active();
+
+        if (configurations.isEmpty()) {
+            TextView vide = new TextView(contexte);
+            vide.setText(R.string.cfg_vide);
+            vide.setTextSize(15f);
+            vide.setGravity(Gravity.CENTER);
+            vide.setTextColor(contexte.getColor(R.color.texte_discret));
+            vide.setPadding(dp(16), dp(48), dp(16), dp(16));
+            liste.addView(vide);
+            return;
+        }
+        for (Configuration c : configurations) {
+            boolean estActive = active != null && active.id.equals(c.id);
+            liste.addView(creerCarte(c, estActive));
+        }
+    }
+
+    private ImageView icone(int ressource, View.OnClickListener action) {
+        ImageView v = new ImageView(getContext());
+        v.setImageResource(ressource);
+        v.setColorFilter(getContext().getColor(R.color.texte));
+        v.setPadding(dp(7), dp(7), dp(7), dp(7));
+        v.setOnClickListener(action);
+        v.setLayoutParams(new LinearLayout.LayoutParams(dp(34), dp(34)));
+        return v;
+    }
+
+    private View creerCarte(Configuration c, boolean estActive) {
+        Context contexte = getContext();
+        final String resume = c.verrouille ? "Configuration verrouillée" : c.type.libelle + " " + c.serveur + ":" + c.port;
+
+        LinearLayout carte = new LinearLayout(contexte);
+        carte.setOrientation(HORIZONTAL);
+        carte.setGravity(Gravity.CENTER_VERTICAL);
+        carte.setPadding(dp(16), dp(12), dp(10), dp(12));
+        GradientDrawable fond = new GradientDrawable();
+        fond.setColor(contexte.getColor(estActive ? R.color.bleu : R.color.carte));
+        fond.setCornerRadius(dp(16));
+        carte.setBackground(fond);
+        LinearLayout.LayoutParams marges = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        marges.bottomMargin = dp(10);
+        carte.setLayoutParams(marges);
+
+        LinearLayout textes = new LinearLayout(contexte);
+        textes.setOrientation(VERTICAL);
+
+        TextView nom = new TextView(contexte);
+        nom.setText(c.nom);
+        nom.setTextSize(16f);
+        nom.setSingleLine(true);
+        nom.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        nom.setTextColor(contexte.getColor(R.color.texte));
+        nom.setTypeface(nom.getTypeface(), Typeface.BOLD);
+        textes.addView(nom);
+
+        TextView details = new TextView(contexte);
+        details.setText(c.verrouille ? "••••••••" : c.serveur);
+        details.setTextSize(13f);
+        details.setSingleLine(true);
+        details.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        details.setTextColor(contexte.getColor(estActive ? R.color.texte : R.color.texte_discret));
+        textes.addView(details);
+        carte.addView(textes, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        LinearLayout droite = new LinearLayout(contexte);
+        droite.setOrientation(VERTICAL);
+        droite.setGravity(Gravity.END);
+
+        LinearLayout icones = new LinearLayout(contexte);
+        icones.setOrientation(HORIZONTAL);
+        icones.addView(icone(R.drawable.ic_copier, v -> {
+            ClipboardManager cm = (ClipboardManager) contexte.getSystemService(Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("config", (c.verrouille || c.lienOriginal == null || c.lienOriginal.isEmpty()) ? resume : c.lienOriginal));
+            Toast.makeText(contexte, "Copié", Toast.LENGTH_SHORT).show();
+        }));
+        icones.addView(icone(R.drawable.ic_partager, v -> PartageDialogue.ouvrir(contexte, c)));
+        icones.addView(icone(R.drawable.ic_modifier, v -> {
+            if (c.verrouille) {
+                Toast.makeText(contexte, "Configuration verrouillée", Toast.LENGTH_SHORT).show();
+            } else if (c.type == TypeConnexion.SSH) {
+                FormulaireSsh.ouvrir(contexte, store, c, this::rafraichir);
+            } else if (c.type == TypeConnexion.SLOWDNS) {
+                FormulaireSlowDns.ouvrir(contexte, store, c, this::rafraichir);
+            } else if (c.type == TypeConnexion.SHADOWSOCKS) {
+                editerShadowsocks(contexte, c);
+            } else {
+                EditeurConfig.ouvrir(contexte, store, c, this::rafraichir);
+            }
+        }));
+        icones.addView(icone(R.drawable.ic_supprimer, v -> confirmerSuppression(c)));
+        droite.addView(icones);
+
+        LinearLayout bas = new LinearLayout(contexte);
+        bas.setGravity(Gravity.END);
+        TextView ping = new TextView(contexte);
+        ResultatsPing.lier(c.id, ping);
+        ping.setTextSize(13f);
+        ping.setTextColor(contexte.getColor(R.color.texte_discret));
+        ping.setPadding(0, 0, dp(10), 0);
+        bas.addView(ping);
+        TextView type = new TextView(contexte);
+        type.setText(c.type == TypeConnexion.SLOWDNS ? "slowdns" : c.type == TypeConnexion.SSH ? "ssh" : "v2ray");
+        type.setTextSize(13f);
+        type.setTextColor(contexte.getColor(R.color.texte));
+        bas.addView(type);
+        droite.addView(bas);
+        carte.addView(droite);
+
+        carte.setOnClickListener(v -> {
+            String refus = PartageConfig.verifierAcces(contexte, c);
+            if (refus != null) {
+                new AlertDialog.Builder(contexte).setTitle(c.nom).setMessage(refus)
+                        .setPositiveButton(R.string.cfg_ok, null).show();
+                return;
+            }
+            store.selectionner(c.id);
+            rafraichir();
+        });
+        carte.setOnLongClickListener(v -> {
+            if (c.type == TypeConnexion.SLOWDNS || c.type == TypeConnexion.SSH
+                    || c.type == TypeConnexion.SHADOWSOCKS) {
+                Toast.makeText(contexte, "Réglage disponible pour VMess, VLESS et Trojan",
+                        Toast.LENGTH_SHORT).show();
+                return true;
+            }
+            LinearLayout zone = new LinearLayout(contexte);
+            zone.setOrientation(VERTICAL);
+            zone.setPadding(dp(20), dp(8), dp(20), 0);
+            TextView info = new TextView(contexte);
+            info.setText("Certains serveurs ont un certificat sans nom valide. L'autoriser "
+                    + "permet la connexion, mais ne protège plus contre une usurpation du "
+                    + "serveur. À utiliser seulement pour un serveur de confiance.");
+            info.setTextSize(14f);
+            zone.addView(info);
+            final android.widget.CheckBox cb = new android.widget.CheckBox(contexte);
+            cb.setText("Autoriser un certificat non vérifié");
+            cb.setChecked(c.certNonVerifie);
+            zone.addView(cb);
+            lireEmpreinte(contexte, c);
+            return true;
+        });
+        return carte;
+    }
+
+
+    private void lireEmpreinte(final Context ctx, final Configuration c) {
+        Toast.makeText(ctx, "Lecture du certificat…", Toast.LENGTH_SHORT).show();
+        final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+        new Thread(() -> {
+            String empreinte = null;
+            String erreur = null;
+            try {
+                javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
+                sc.init(null, new javax.net.ssl.TrustManager[]{new javax.net.ssl.X509TrustManager() {
+                    public void checkClientTrusted(java.security.cert.X509Certificate[] x, String a) { }
+                    public void checkServerTrusted(java.security.cert.X509Certificate[] x, String a) { }
+                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                        return new java.security.cert.X509Certificate[0];
+                    }
+                }}, null);
+                String sni = !c.sniManuel.isEmpty() ? c.sniManuel : c.serveur;
+                try (java.net.Socket brut = new java.net.Socket()) {
+                    brut.connect(new java.net.InetSocketAddress(c.serveur, c.port), 8000);
+                    brut.setSoTimeout(8000);
+                    javax.net.ssl.SSLSocket ss = (javax.net.ssl.SSLSocket) sc.getSocketFactory()
+                            .createSocket(brut, sni, c.port, true);
+                    javax.net.ssl.SSLParameters pr = ss.getSSLParameters();
+                    pr.setServerNames(java.util.Collections.singletonList(
+                            new javax.net.ssl.SNIHostName(sni)));
+                    ss.setSSLParameters(pr);
+                    ss.startHandshake();
+                    java.security.cert.Certificate[] chaine = ss.getSession().getPeerCertificates();
+                    byte[] d = java.security.MessageDigest.getInstance("SHA-256")
+                            .digest(chaine[0].getEncoded());
+                    StringBuilder sb = new StringBuilder();
+                    for (byte b : d) {
+                        sb.append(String.format("%02x", b));
+                    }
+                    empreinte = sb.toString();
+                }
+            } catch (Exception e) {
+                erreur = e.getMessage();
+            }
+            final String emp = empreinte;
+            final String err = erreur;
+            h.post(() -> {
+                if (emp == null) {
+                    Toast.makeText(ctx, "Lecture impossible : " + err, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                StringBuilder lisible = new StringBuilder();
+                for (int i = 0; i < emp.length(); i += 2) {
+                    lisible.append(emp, i, i + 2).append(i < 62 ? ":" : "");
+                }
+                new AlertDialog.Builder(ctx)
+                        .setTitle("Faire confiance à ce serveur ?")
+                        .setMessage("Empreinte du certificat :\n\n" + lisible.toString().toUpperCase()
+                                + "\n\nSeul ce certificat sera accepté par la connexion.")
+                        .setPositiveButton("Faire confiance", (d, w) -> {
+                            c.pinCert = emp;
+                            c.certNonVerifie = false;
+                            store.remplacer(c);
+                            rafraichir();
+                        })
+                        .setNeutralButton("Retirer", (d, w) -> {
+                            c.pinCert = "";
+                            store.remplacer(c);
+                            rafraichir();
+                        })
+                        .setNegativeButton(R.string.cfg_annuler, null)
+                        .show();
+            });
+        }, "yiwalo-empreinte").start();
+    }
+
+
+    // ------------------------------------------------------------------
+    // Modification d'une configuration Shadowsocks
+    // ------------------------------------------------------------------
+
+    private static String[] lireShadowsocks(String lien) {
+        try {
+            String reste = lien.substring("ss://".length());
+            int d = reste.indexOf('#');
+            if (d >= 0) {
+                reste = reste.substring(0, d);
+            }
+            int q = reste.indexOf('?');
+            if (q >= 0) {
+                reste = reste.substring(0, q);
+            }
+            while (reste.endsWith("/")) {
+                reste = reste.substring(0, reste.length() - 1);
+            }
+            String info;
+            int a = reste.lastIndexOf('@');
+            if (a >= 0) {
+                String brut = java.net.URLDecoder.decode(reste.substring(0, a).replace("+", "%2B"), "UTF-8");
+                info = brut.contains(":") ? brut : decoderSs(brut);
+            } else {
+                String tout = decoderSs(reste);
+                int b = tout.lastIndexOf('@');
+                info = b >= 0 ? tout.substring(0, b) : tout;
+            }
+            int p = info.indexOf(':');
+            return p < 0 ? new String[]{info, ""}
+                    : new String[]{info.substring(0, p), info.substring(p + 1)};
+        } catch (Exception e) {
+            return new String[]{"", ""};
+        }
+    }
+
+    private static String decoderSs(String t) throws java.io.UnsupportedEncodingException {
+        String n = t.replace('-', '+').replace('_', '/').replace("=", "");
+        while (n.length() % 4 != 0) {
+            n += "=";
+        }
+        return new String(android.util.Base64.decode(n, android.util.Base64.DEFAULT), "UTF-8");
+    }
+
+    private void editerShadowsocks(final Context ctx, final Configuration c) {
+        String[] mp = lireShadowsocks(c.lienOriginal);
+        LinearLayout zone = new LinearLayout(ctx);
+        zone.setOrientation(LinearLayout.VERTICAL);
+        zone.setPadding(dp(20), dp(8), dp(20), 0);
+        final EditText nom = champSs(ctx, "Nom", c.nom);
+        final EditText hote = champSs(ctx, "Adresse du serveur", c.serveur);
+        final EditText port = champSs(ctx, "Port", String.valueOf(c.port));
+        port.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        final EditText methode = champSs(ctx, "Méthode (ex. aes-256-gcm)", mp[0]);
+        final EditText mdp = champSs(ctx, "Mot de passe", mp[1]);
+        zone.addView(nom);
+        zone.addView(hote);
+        zone.addView(port);
+        zone.addView(methode);
+        zone.addView(mdp);
+        ScrollView defil = new ScrollView(ctx);
+        defil.addView(zone);
+        new AlertDialog.Builder(ctx)
+                .setTitle("Modifier Shadowsocks")
+                .setView(defil)
+                .setPositiveButton("Enregistrer", (d, w) -> {
+                    try {
+                        String h = hote.getText().toString().trim();
+                        String info = methode.getText().toString().trim() + ":"
+                                + mdp.getText().toString();
+                        String b64 = android.util.Base64.encodeToString(info.getBytes("UTF-8"),
+                                android.util.Base64.NO_WRAP | android.util.Base64.NO_PADDING
+                                        | android.util.Base64.URL_SAFE);
+                        String lien = "ss://" + b64 + "@" + (h.contains(":") ? "[" + h + "]" : h)
+                                + ":" + port.getText().toString().trim();
+                        String n = nom.getText().toString().trim();
+                        if (!n.isEmpty()) {
+                            lien += "#" + java.net.URLEncoder.encode(n, "UTF-8").replace("+", "%20");
+                        }
+                        Configuration a = ImportateurLiens.analyser(lien);
+                        Configuration nouvelle = new Configuration(c.id, a.nom, a.type,
+                                a.serveur, a.port, lien, c.sniManuel);
+                        nouvelle.expireLe = c.expireLe;
+                        nouvelle.message = c.message;
+                        nouvelle.verrouille = c.verrouille;
+                        nouvelle.mobileSeulement = c.mobileSeulement;
+                        nouvelle.bloquerRoot = c.bloquerRoot;
+                        nouvelle.storeSeulement = c.storeSeulement;
+                        nouvelle.appareils = c.appareils;
+                        store.remplacer(nouvelle);
+                        Toast.makeText(ctx, "Enregistré", Toast.LENGTH_SHORT).show();
+                        rafraichir();
+                    } catch (com.yiwalo.tunnel.config.ErreurImport e) {
+                        Toast.makeText(ctx, e.getMessage(), Toast.LENGTH_LONG).show();
+                    } catch (java.io.UnsupportedEncodingException e) {
+                        Toast.makeText(ctx, "Enregistrement impossible", Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton(R.string.cfg_annuler, null)
+                .show();
+    }
+
+    private EditText champSs(Context ctx, String indice, String valeur) {
+        EditText e = new EditText(ctx);
+        e.setHint(indice);
+        e.setText(valeur);
+        e.setSingleLine(true);
+        return e;
+    }
+
+    private void modifierSni(Configuration c) {
+        Context contexte = getContext();
+        EditText saisie = new EditText(contexte);
+        saisie.setText(c.sniManuel);
+        saisie.setHint(R.string.cfg_sni_indice);
+        saisie.setSingleLine(true);
+        saisie.setPadding(dp(16), dp(12), dp(16), dp(12));
+        new AlertDialog.Builder(contexte)
+                .setTitle(R.string.cfg_sni_titre)
+                .setMessage(R.string.cfg_sni_aide)
+                .setView(saisie)
+                .setPositiveButton(R.string.cfg_enregistrer, (d, w) -> {
+                    store.modifierSni(c.id, saisie.getText().toString().trim());
+                    rafraichir();
+                })
+                .setNegativeButton(R.string.cfg_annuler, null)
+                .show();
+    }
+
+    private void confirmerSuppression(Configuration c) {
+        Context contexte = getContext();
+        new AlertDialog.Builder(contexte)
+                .setMessage(contexte.getString(R.string.cfg_confirmer_supprimer, c.nom))
+                .setPositiveButton(R.string.cfg_supprimer, (d, w) -> {
+                    store.supprimer(c.id);
+                    rafraichir();
+                })
+                .setNegativeButton(R.string.cfg_annuler, null)
+                .show();
+    }
+
+    private void importerFichier() {
+        Context contexte = getContext();
+        SelecteurFichier.ouvrir(contexte, uri -> {
+            try (java.io.InputStream in = contexte.getContentResolver().openInputStream(uri);
+                 java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                traiterYiwalo(out.toString("UTF-8"));
+            } catch (Exception e) {
+                Toast.makeText(contexte, "Fichier illisible", Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    private void traiterYiwalo(String texte) {
+        if (!PartageConfig.necessiteMotDePasse(texte)) {
+            traiterYiwalo(texte, "");
+            return;
+        }
+        Context ctx = getContext();
+        EditText mdp = new EditText(ctx);
+        mdp.setHint("Mot de passe");
+        mdp.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        mdp.setPadding(dp(16), dp(12), dp(16), dp(12));
+        new AlertDialog.Builder(ctx)
+                .setTitle("Configuration protégée")
+                .setView(mdp)
+                .setPositiveButton(R.string.cfg_importer,
+                        (d, w) -> traiterYiwalo(texte, mdp.getText().toString()))
+                .setNegativeButton(R.string.cfg_annuler, null)
+                .show();
+    }
+
+    private void traiterYiwalo(String texte, String mdp) {
+        Context contexte = getContext();
+        Configuration c;
+        try {
+            c = PartageConfig.importer(texte, mdp);
+        } catch (Exception e) {
+            Toast.makeText(contexte, "Code invalide ou mot de passe incorrect", Toast.LENGTH_LONG).show();
+            return;
+        }
+        String suite = c.message.isEmpty() ? "" : "\n\n" + c.message;
+        if (PartageConfig.expiree(c)) {
+            new AlertDialog.Builder(contexte)
+                    .setTitle("Configuration expirée")
+                    .setMessage("Expirée le " + PartageConfig.formater(c.expireLe) + suite)
+                    .setPositiveButton(R.string.cfg_ok, null)
+                    .show();
+            return;
+        }
+        String refus = PartageConfig.verifierAcces(contexte, c);
+        if (refus != null) {
+            new AlertDialog.Builder(contexte)
+                    .setTitle(c.nom)
+                    .setMessage(refus + suite)
+                    .setPositiveButton(R.string.cfg_ok, null)
+                    .show();
+            return;
+        }
+        boolean ajoute = false;
+        boolean renouvele = false;
+        Configuration existant = null;
+        for (Configuration x : store.lister()) {
+            if (x.id.equals(c.id)) {
+                existant = x;
+                break;
+            }
+        }
+        if (existant == null) {
+            store.ajouterCopie(c);
+            store.selectionner(c.id);
+            ajoute = true;
+        } else if (existant.expireLe > 0 && c.expireLe != existant.expireLe) {
+            Configuration maj = new Configuration(existant.id, c.nom, c.type,
+                    c.serveur, c.port, c.lienOriginal, existant.sniManuel);
+            maj.expireLe = c.expireLe;
+            maj.message = c.message;
+            maj.verrouille = c.verrouille;
+            maj.mobileSeulement = c.mobileSeulement;
+            maj.bloquerRoot = c.bloquerRoot;
+            maj.storeSeulement = c.storeSeulement;
+            maj.appareils = c.appareils;
+            maj.slowNs = c.slowNs;
+            maj.slowCle = c.slowCle;
+            maj.slowResolveur = c.slowResolveur;
+            maj.sshUser = c.sshUser;
+            maj.sshMdp = c.sshMdp;
+            maj.pinCert = existant.pinCert;
+            store.remplacer(maj);
+            store.selectionner(existant.id);
+            renouvele = true;
+        } else {
+            store.selectionner(existant.id);
+        }
+        rafraichir();
+        String info = ajoute ? "Configuration ajoutée"
+                : (renouvele ? "Configuration renouvelée" : "Configuration déjà présente");
+        if (c.expireLe > 0) info += "\nExpire le " + PartageConfig.formater(c.expireLe);
+        new AlertDialog.Builder(contexte)
+                .setTitle(c.nom)
+                .setMessage(info + suite)
+                .setPositiveButton(R.string.cfg_ok, null)
+                .show();
+    }
+
+    private int dp(int valeur) {
+        return Math.round(valeur * getResources().getDisplayMetrics().density);
+    }
+}

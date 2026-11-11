@@ -1,0 +1,86 @@
+package com.yiwalo.tunnel.config;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+public final class Configuration {
+    public final String id;
+    public final String nom;
+    public final TypeConnexion type;
+    public final String serveur;
+    public final int port;
+    public final String lienOriginal;
+    public final String sniManuel;
+    public long expireLe = 0;
+    public String message = "";
+    public boolean verrouille, mobileSeulement, bloquerRoot, storeSeulement;
+    public String appareils = "";
+    public String slowNs = "", slowCle = "", slowResolveur = "", sshUser = "", sshMdp = "";
+    public boolean certNonVerifie;
+
+    public Configuration(String id, String nom, TypeConnexion type,
+                         String serveur, int port, String lienOriginal) {
+        this(id, nom, type, serveur, port, lienOriginal, "");
+    }
+
+    public Configuration(String id, String nom, TypeConnexion type,
+                         String serveur, int port, String lienOriginal, String sniManuel) {
+        this.sniManuel = sniManuel == null ? "" : sniManuel.trim();
+        this.id = id;
+        this.nom = nom;
+        this.type = type;
+        this.serveur = serveur;
+        this.port = port;
+        this.lienOriginal = lienOriginal;
+    }
+
+    public JSONObject versJson() throws JSONException {
+        JSONObject o = new JSONObject();
+        o.put("id", id);
+        o.put("nom", nom);
+        o.put("type", type.name());
+        o.put("serveur", serveur);
+        o.put("port", port);
+        o.put("lien", lienOriginal);
+        o.put("sni", sniManuel);
+        o.put("exp", expireLe);
+        o.put("msg", message);
+        o.put("lock", verrouille);
+        o.put("mob", mobileSeulement);
+        o.put("root", bloquerRoot);
+        o.put("store", storeSeulement);
+        o.put("dev", appareils);
+        o.put("sd_ns", slowNs);
+        o.put("sd_cle", slowCle);
+        o.put("sd_dns", slowResolveur);
+        o.put("ssh_u", sshUser);
+        o.put("ssh_p", sshMdp);
+        o.put("insec", certNonVerifie);
+        return o;
+    }
+
+    public static Configuration depuisJson(JSONObject o) throws JSONException {
+        Configuration c = new Configuration(
+                o.getString("id"),
+                o.getString("nom"),
+                TypeConnexion.valueOf(o.getString("type")),
+                o.getString("serveur"),
+                o.getInt("port"),
+                o.getString("lien"),
+                o.optString("sni", ""));
+        c.expireLe = o.optLong("exp", 0);
+        c.message = o.optString("msg", "");
+        c.verrouille = o.optBoolean("lock", false);
+        c.mobileSeulement = o.optBoolean("mob", false);
+        c.bloquerRoot = o.optBoolean("root", false);
+        c.storeSeulement = o.optBoolean("store", false);
+        c.appareils = o.optString("dev", "");
+        c.slowNs = o.optString("sd_ns", "");
+        c.slowCle = o.optString("sd_cle", "");
+        c.slowResolveur = o.optString("sd_dns", "");
+        c.sshUser = o.optString("ssh_u", "");
+        c.sshMdp = o.optString("ssh_p", "");
+        c.certNonVerifie = o.optBoolean("insec", false);
+        return c;
+    }
+}
