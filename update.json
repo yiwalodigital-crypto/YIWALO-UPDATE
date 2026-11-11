@@ -1,8 +1,8 @@
 {
-  "versionCode": 27,
-  "versionName": "2.9.8",
-  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.8/YIWALO-Tunnel.apk",
-  "sha256": "",
-  "changelog": "Outil renommé Recherche d'IP",
+  "versionCode": 30,
+  "versionName": "2.9.11",
+  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.11/YIWALO-Tunnel-2.9.11.apk",
+  "sha256": "a5f4063071307024d744db2adc2104a04c8407e8c1173734cafae45ffbdd6d39",
+  "changelog": "- Nouvelles icônes des menus",
   "force": false
 }
