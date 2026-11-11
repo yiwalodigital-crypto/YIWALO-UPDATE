@@ -1,8 +1,8 @@
 {
-  "versionCode": 32,
-  "versionName": "2.9.13",
-  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.13/YIWALO-Tunnel-2.9.13.apk",
-  "sha256": "54ce23946a6c5eb069325668552508629d048e5113b596fdd0d57e99092b7cf2",
-  "changelog": "- Copie : code chiffré et verrouillé",
+  "versionCode": 33,
+  "versionName": "2.9.14",
+  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.14/YIWALO-Tunnel-2.9.14.apk",
+  "sha256": "2edb70f62d89ffd71f9eba7d6bbf6b9bbff50ad826ea0e91a5ea92f733422a8d",
+  "changelog": "- Copie : verrouillée = chiffrée, sinon complète",
   "force": false
 }
