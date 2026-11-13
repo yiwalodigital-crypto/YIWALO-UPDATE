@@ -1,8 +1,8 @@
 {
-  "versionCode": 36,
-  "versionName": "2.9.17",
-  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.17/YIWALO-Tunnel-2.9.17.apk",
-  "sha256": "c684a4b742eadbaeddc60f054f43cbb4cb4b98796f23ba0197bc79b1b2fd6025",
-  "changelog": "- Téléchargement de la mise à jour en arrière-plan avec reprise automatique, installation directe quand le fichier est prêt",
+  "versionCode": 37,
+  "versionName": "2.9.18",
+  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.18/YIWALO-Tunnel-2.9.18.apk",
+  "sha256": "2d066d001a094e126ec7c0149f8f85d9faa1b279cf4e4f0ed5cfd2b698713953",
+  "changelog": "- Temps de connexion affiché en direct dans la notification du VPN",
   "force": false
 }
