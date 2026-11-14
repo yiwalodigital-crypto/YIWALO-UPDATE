@@ -1,8 +1,8 @@
 {
-  "versionCode": 38,
-  "versionName": "2.9.19",
-  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.19/YIWALO-Tunnel-2.9.19.apk",
-  "sha256": "81109be7daf1f89689d62a301f74f2436297d8e98cdb7ff2fb38096cd8e0a323",
-  "changelog": "- Téléchargement de la mise à jour beaucoup plus rapide, fenêtre de progression simplifiée",
+  "versionCode": 39,
+  "versionName": "2.9.20",
+  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.20/YIWALO-Tunnel-2.9.20.apk",
+  "sha256": "ea75cc0a4f8bcce495efabebb4bbf40ac00f744d06a86a0c5d1551cbe57eeff2",
+  "changelog": "- Test de fuite DNS refait : résultat immédiat et fiable",
   "force": false
 }
