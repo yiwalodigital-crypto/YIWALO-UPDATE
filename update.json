@@ -2,7 +2,7 @@
   "versionCode": 40,
   "versionName": "2.9.21",
   "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.21/YIWALO-Tunnel-2.9.21.apk",
-  "sha256": "528a97ec8fcd0495c5749f47b128f2c55a438771f4f67f79eceae8216ed78583",
-  "changelog": "- Fenêtre de mise à jour simplifiée",
+  "sha256": "d2979323d708b44c5f4a9be1f8c613f7f266246f5c2300d76a3ef55879aa5ffc",
+  "changelog": "- Données reçues et envoyées affichées en Mo et Go, fenêtre de mise à jour simplifiée",
   "force": false
 }
