@@ -1,8 +1,8 @@
 {
-  "versionCode": 41,
-  "versionName": "2.9.22",
-  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.22/YIWALO-Tunnel-2.9.22.apk",
-  "sha256": "e275ad39665c33043418b59daedabbe8b60baba849a3efec2964a413006377cb",
-  "changelog": "- Quotas : alerte simple et alerte avec sirène et coupure du VPN, consommation réelle",
+  "versionCode": 42,
+  "versionName": "2.9.23",
+  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.23/YIWALO-Tunnel-2.9.23.apk",
+  "sha256": "3627a74feff719b0af7d96b9d38741b8fdae4697ed912a4deabaeb3a0f3ffe66",
+  "changelog": "- Quotas : alerte simple et alerte avec sirène et coupure du VPN, consommation réelle sur l'accueil",
   "force": false
 }
