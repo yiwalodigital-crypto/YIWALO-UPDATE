@@ -2,7 +2,7 @@
   "versionCode": 44,
   "versionName": "2.9.25",
   "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.25/YIWALO-Tunnel-2.9.25.apk",
-  "sha256": "1376b7d4197d3e26e3924c2b6d1bd8ce6913d25b78b53ddee9449f9eae58b97b",
-  "changelog": "- Moteur : choix automatique de la meilleure adresse du serveur, reprise plus fiable",
+  "sha256": "45770bfabc2e342ec568d60acdfcfc11f9c1302508aad8cb366f6f7f39547aff",
+  "changelog": "- Réglage Connexion stable, moteur plus fiable",
   "force": false
 }
