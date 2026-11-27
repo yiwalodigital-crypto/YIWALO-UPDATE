@@ -1,8 +1,8 @@
 {
-  "versionCode": 60,
-  "versionName": "2.10.4",
-  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.10.4/YIWALO-Tunnel-2.10.4.apk",
-  "sha256": "d6da9b9d46efee8d7df014bec46cbe3662e122c0a0f0e3cf0cc43369d9c737fe",
-  "changelog": "- Journal detaille (diagnostic coupures)",
+  "versionCode": 61,
+  "versionName": "2.10.5",
+  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.10.5/YIWALO-Tunnel-2.10.5.apk",
+  "sha256": "c2beca5a299258b4e7b40431bb682705e1ac43e9bca890ec82146777c3aef730",
+  "changelog": "- Relance automatique quand le tunnel se fige",
   "force": false
 }
