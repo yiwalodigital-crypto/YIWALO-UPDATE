@@ -1,8 +1,8 @@
 {
-  "versionCode": 44,
-  "versionName": "2.9.25",
-  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.9.25/YIWALO-Tunnel-2.9.25.apk",
-  "sha256": "45770bfabc2e342ec568d60acdfcfc11f9c1302508aad8cb366f6f7f39547aff",
-  "changelog": "- Réglage Connexion stable, moteur plus fiable",
+  "versionCode": 58,
+  "versionName": "2.10.2",
+  "apkUrl": "https://github.com/yiwalodigital-crypto/YIWALO-UPDATE/releases/download/v2.10.2/YIWALO-Tunnel-2.10.2.apk",
+  "sha256": "4ca7c5e1a483571cbb9da2ae3feb4183cd591f3cdb123eeedbb64483687a4d12",
+  "changelog": "- Reseau faible : le tunnel ne coupe plus, Termux passe par le VPN",
   "force": false
 }
